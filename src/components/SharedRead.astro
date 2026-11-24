@@ -1,0 +1,128 @@
+---
+// The toy's twelve weights drawn three times: each is read once, and used once per token.
+import { count } from "../lib/format";
+import { W } from "../lib/toy";
+
+const ROWS = W.length;
+const COLS = W[0].length;
+const WEIGHTS = ROWS * COLS;
+const CELL = 36;
+const GAP = 6;
+const PITCH = 8;
+const width = COLS * CELL + (COLS - 1) * GAP;
+const height = ROWS * CELL + (ROWS - 1) * GAP;
+
+const dots = (tokens: number) => {
+	const k = Math.sqrt(tokens);
+	const start = (CELL - (k - 1) * PITCH) / 2;
+	return Array.from({ length: tokens }, (_, i) => ({
+		x: start + (i % k) * PITCH,
+		y: start + Math.floor(i / k) * PITCH,
+	}));
+};
+
+const cells = Array.from({ length: WEIGHTS }, (_, i) => ({
+	x: (i % COLS) * (CELL + GAP),
+	y: Math.floor(i / COLS) * (CELL + GAP),
+}));
+
+const PANELS = [1, 4, 16].map((tokens) => ({ tokens, dots: dots(tokens) }));
+---
+
+<div class="multiples">
+	{
+		PANELS.map(({ tokens, dots }) => (
+			<section class="panel">
+				<p class="tokens">
+					{count(tokens)} {tokens === 1 ? "token" : "tokens"}
+				</p>
+				<svg
+					viewBox={`-2 -2 ${width + 4} ${height + 4}`}
+					role="img"
+					aria-label={`${count(tokens)} ${tokens === 1 ? "token" : "tokens"}: ${WEIGHTS} weights, each read once and used ${count(tokens)} ${tokens === 1 ? "time" : "times"}`}
+				>
+					{cells.map((c) => (
+						<g transform={`translate(${c.x} ${c.y})`}>
+							<rect class="w" width={CELL} height={CELL} />
+							{dots.map((d) => (
+								<circle class="m" cx={d.x} cy={d.y} r="2.75" />
+							))}
+						</g>
+					))}
+				</svg>
+				<p class="counts">
+					<span class="read">{count(WEIGHTS)} weights read</span>
+					<span class="mults">
+						<b>{count(WEIGHTS * tokens)}</b> multiplications
+					</span>
+				</p>
+			</section>
+		))
+	}
+</div>
+
+<style>
+	.multiples {
+		display: grid;
+		gap: 1.25rem;
+		max-width: 22rem;
+		margin: 0 auto;
+	}
+	.panel {
+		display: grid;
+		grid-template-columns: 7.5rem 1fr;
+		grid-template-areas: "svg tokens" "svg counts";
+		align-content: center;
+		column-gap: 1rem;
+	}
+	@media (min-width: 46rem) {
+		.multiples {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 2rem;
+			max-width: 40rem;
+		}
+		.panel {
+			grid-template-columns: 1fr;
+			grid-template-areas: "tokens" "svg" "counts";
+			row-gap: 0.625rem;
+		}
+	}
+	p {
+		margin: 0;
+		font: 0.8125rem/1.5 var(--mono);
+	}
+	.tokens {
+		grid-area: tokens;
+		align-self: end;
+		color: var(--ink);
+	}
+	svg {
+		grid-area: svg;
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+	.counts {
+		grid-area: counts;
+		display: flex;
+		flex-direction: column;
+	}
+	.read {
+		color: var(--bytes-ink);
+	}
+	.mults {
+		color: var(--math-ink);
+	}
+	b {
+		font-weight: inherit;
+		font-size: 1rem;
+	}
+	.w {
+		fill: var(--bytes-wash);
+		stroke: var(--bytes);
+		stroke-width: 1.5;
+	}
+	.m {
+		fill: var(--math);
+	}
+</style>

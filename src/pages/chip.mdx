@@ -1,0 +1,130 @@
+---
+layout: ../layouts/Stop.astro
+slug: chip
+description: Inside an H200, the chip that runs each pass. Why the weights live in memory beside it, how its compute blocks and threads keep that memory busy, and the two speeds that set the time of every step.
+---
+
+import ChipZoom from "../components/ChipZoom.astro";
+import Figure from "../components/Figure.astro";
+import MemoryLadder from "../components/MemoryLadder.astro";
+import PassVsL2 from "../components/PassVsL2.astro";
+import Term from "../components/Term.astro";
+import TimeBars from "../components/TimeBars.astro";
+import WarpTurns from "../components/WarpTurns.astro";
+import { decodeThroughput, passBytesPerGpu } from "../lib/challenge";
+import { bytes, count, us } from "../lib/format";
+import { ON_CHIP_BYTES } from "../lib/kernels";
+import {
+	BALANCE_POINT,
+	FP32_BALANCE_POINT,
+	FP32_UNITS_PER_SM,
+	GPUS,
+	getProjection,
+	H200,
+	MEASURED_LATENCY_CYCLES,
+	mathUs,
+	memoryUs,
+	projectionCost,
+	weightBytesPerGpu,
+} from "../lib/model";
+
+export const gb = (n) => `${count(n / 1e9)} GB`;
+export const mib = (n) => `${count(n / 2 ** 20)} MiB`;
+export const l2s = Math.round(passBytesPerGpu() / H200.l2Bytes);
+export const perUnit = H200.maxThreadsPerSm / FP32_UNITS_PER_SM;
+export const warps = H200.maxThreadsPerSm / H200.warpSize;
+export const tensorOverCuda = Math.round(H200.flopsPerSecond / H200.fp32FlopsPerSecond);
+export const pooler = projectionCost(getProjection("pooler"), 1);
+export const memory = memoryUs(pooler.bytes);
+export const math = mathUs(pooler.flops);
+export const passUs = 1e6 / decodeThroughput(1).each;
+
+Each of the server's {GPUS} H200s holds about {gb(weightBytesPerGpu)} of Muse Spark Open's weights: its share of every layer's experts and attention heads, plus the shared projections. Meanwhile, all the fast memory tucked inside the processor chip itself adds up to about {mib(ON_CHIP_BYTES)}. Because the weights cannot fit on the die, they live beside the processor and stream across on every pass.
+
+Because a token's chosen experts can land unevenly across the eight GPUs, a pass waits on whichever card has the most to read. The numbers in this chapter track that busiest GPU, which moves about {gb(passBytesPerGpu())} in a pass for one person.
+
+<Figure surface="paper" label="from the server to one compute block">
+	<ChipZoom />
+</Figure>
+
+Surrounding the processor sit {H200.hbmStacks} stacks of <Term id="hbm">high-bandwidth memory</Term> (HBM), holding {H200.memoryGB} GB per H200. Every weight and cache entry a pass touches crosses the short, wide path between those memory stacks and the processor die. (The drawing follows NVIDIA's published layout for the H100, which uses the same Hopper processor die with fewer active HBM stacks.)
+
+## Compute blocks and threads
+
+The processor in the center is {H200.sms} copies of one repeating design. NVIDIA calls each copy a streaming multiprocessor (SM); in prose we also call them <Term id="sm">compute blocks</Term>.
+
+Each compute block carries two kinds of arithmetic units alongside its own small memories:
+- {FP32_UNITS_PER_SM} general-purpose <Term id="cudaCore">CUDA cores</Term>, each doing one 32-bit multiply-add at a time, totaling {count(H200.fp32FlopsPerSecond / 1e12)} trillion operations a second across the chip.
+- {H200.tensorCoresPerSm} specialized <Term id="tensorCore">tensor cores</Term>, each multiplying a small matrix tile in one step, totaling {count(H200.flopsPerSecond / 1e12)} trillion 16-bit operations a second (about {tensorOverCuda} times faster than the scalar CUDA cores whenever the work arrives as matrix-by-matrix tiles).
+
+What runs on a compute block? Many short lists of instructions, each working on its own handful of indices, the way a loop body runs once for each value of `i`. Each one is a <Term id="thread">thread</Term>.
+
+A thread is not a core. A compute block can hold up to {count(H200.maxThreadsPerSm)} threads at once, {perUnit} for every FP32 arithmetic unit. Rather than steering each thread on its own, the block issues each instruction to {H200.warpSize} threads together on {H200.warpSize} different numbers. Those {H200.warpSize} threads moving in lockstep are a <Term id="warp">warp</Term>, and a full compute block holds {warps} of them.
+
+Why keep {perUnit} threads for every arithmetic unit? Because a GPU thread spends most of its time waiting for memory, and that wait is long.
+
+## Four kinds of memory
+
+Between the arithmetic units and the weights sit four tiers of memory. Further from the compute units, memory is shared by more of the chip, delivers lower bandwidth, takes longer to answer, and (once off the compute block) holds far more.
+
+<Figure surface="paper" label="the memory ladder">
+	<MemoryLadder />
+</Figure>
+
+The top two tiers belong to a single compute block. <Term id="register">Registers</Term> hold the values a thread is computing on right now, visible to that thread alone; they sit directly inside the compute units' own circuitry, feeding inputs straight into each instruction. Next sits <Term id="sharedMemory">shared memory</Term>, a fast on-block scratchpad that threads working on the same piece of a job use to exchange tiles (sharing its physical SRAM with the block's automatic L1 cache).
+
+Off the block, the <Term id="l2">L2 cache</Term> and HBM serve the entire chip so any compute block can read any address. An HBM request takes about {MEASURED_LATENCY_CYCLES.hbm} clock cycles to return, compared with {MEASURED_LATENCY_CYCLES.shared} cycles for shared memory, as measured on Hopper silicon by <a href="https://arxiv.org/abs/2402.13499">Luo et al. (2024)</a>. NVIDIA's <a href="https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/">Hopper architecture overview</a> publishes capacities rather than on-chip latencies.
+
+## Why the weights can't stay
+
+If the L2 cache remembers recently fetched bytes, why can't it hold the weights between tokens?
+
+Hardware area and pass size both rule it out. On-chip memory uses SRAM, six transistors per bit etched onto expensive logic silicon, so putting tens of gigabytes on the compute die is impractical. HBM reaches {H200.memoryGB} GB by stacking dense DRAM chips vertically beside the die instead. Put together, every register, shared-memory bank, and L2 line on the H200 holds about {mib(ON_CHIP_BYTES)} against {gb(weightBytesPerGpu)} of weights. Worse, a pass uses each weight once and streams through every other layer before returning to the first.
+
+<Figure surface="paper" label="one pass against the L2">
+	<PassVsL2 />
+</Figure>
+
+By the time the next pass needs the first square again, {l2s - 1} other L2-sized chunks have pushed it out. So every pass fetches its active weights from HBM again.
+
+## Waiting without stopping
+
+With one warp, a {MEASURED_LATENCY_CYCLES.hbm}-cycle trip to HBM would leave a compute block idle almost constantly. Instead, the block keeps dozens of warps resident at once, much like an async server juggling many in-flight I/O requests. Whenever one warp stalls on memory, the scheduler hands the next cycle to another warp whose data has arrived. In a simplified block where every wait lasts three turns, how often does arithmetic sit idle with one warp versus four?
+
+<Figure label="warps taking turns">
+	<WarpTurns />
+</Figure>
+
+One warp leaves the arithmetic idle three turns in four; four keep it busy. Every waiting warp also represents a memory request already in flight, and HBM reaches its rated throughput only when thousands of requests are in flight across all {H200.sms} compute blocks. This is <Term id="latencyHiding">latency hiding</Term>, and it is why a GPU wants far more threads than cores.
+
+The limit is register space. All resident warps on a block share its register file, so threads that keep many live numbers leave room for fewer warps and fewer requests in flight.
+
+## The memory wall and two speeds
+
+Over successive GPU generations, math throughput has outpaced memory bandwidth. From NVIDIA's V100 to the H200, 16-bit tensor-core math grew roughly eightfold while HBM bandwidth grew roughly fivefold, and newer chips keep widening the gap. That hardware divergence, the memory wall, explains why quantization, grouped-query attention, mixture of experts, batching, and custom kernels dominate modern LLM inference.
+
+On an H200, two rates govern every step:
+- <Term id="bandwidth">Memory bandwidth</Term>: HBM delivers {H200.bytesPerSecond / 1e12} TB/s to the compute blocks.
+- Compute throughput: tensor cores reach {count(H200.flopsPerSecond / 1e12)} TFLOPS on 16-bit matrix multiplications, while scalar FP32 CUDA cores reach {count(H200.fp32FlopsPerSecond / 1e12)} TFLOPS.
+
+Dividing compute by bandwidth gives the chip's balance point: the H200's tensor cores can perform about {Math.round(BALANCE_POINT)} operations for every byte arriving from HBM, compared with about {Math.round(FP32_BALANCE_POINT)} operations per byte on scalar CUDA cores. Comparing that ratio against a step's own <Term id="arithmeticIntensity">arithmetic intensity</Term> (operations performed per byte moved) gives the <Term id="roofline">roofline model</Term>. Below the chip's balance point, the step is <Term id="memoryBound">memory-bound</Term> and waits on bytes; above it, the step is <Term id="computeBound">compute-bound</Term> and waits on arithmetic.
+
+For one token multiplying a 2-byte weight, the chip has time for {count(Math.round(2 * BALANCE_POINT))} tensor-core operations per weight and uses two: an arithmetic intensity of 1 operation per byte, deeply memory-bound on either kind of core.
+
+Take the largest projection in a layer, which narrows {count(getProjection("pooler").cols)} working numbers to the {count(getProjection("pooler").rows)} going into the experts. Moving its {bytes(pooler.bytes)} at peak bandwidth takes {us(memory)}, while its arithmetic at peak tensor-core speed takes {us(math)}. Because data movement and math can overlap, the longer bar sets the shortest possible time, an ideal lower bound rather than a measured runtime.
+
+Which would speed up that projection: doubling the chip's arithmetic, or doubling its memory bandwidth?
+
+<Figure surface="paper" label="moving data against arithmetic">
+	<TimeBars
+		cases={[
+			{ title: "the H200", memoryUs: memory, mathUs: math },
+			{ title: "with twice the arithmetic", memoryUs: memory, mathUs: math / 2 },
+			{ title: "with twice the memory speed", memoryUs: memory / 2, mathUs: math },
+		]}
+	/>
+</Figure>
+
+Doubling arithmetic changes nothing because this step never waited on math. Doubling bandwidth cuts the ideal time in half, from {us(memory)} to {us(memory / 2)}. Almost every step in single-user generation looks like this, so the sum of their ideal floors ({us(passUs)} a pass, or {count(decodeThroughput(1).each)} tokens a second) is set by bytes.
+
+None of those bytes move on their own. Something has to tell each compute block which weights to fetch and what to do once they arrive. What does the program that drives the chip look like?

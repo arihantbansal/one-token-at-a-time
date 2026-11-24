@@ -1,0 +1,74 @@
+---
+// The five kernel problems, each beside the chapter that explains its work, with the judge's ideal,
+// SGLang's measured time and the best entry's, all averaged over the problem's loads as the judge does.
+import { href, STOPS } from "../data/stops";
+import { contestTimes, officialUrl, problem } from "../lib/challenge";
+import { times, us } from "../lib/format";
+
+const rows = STOPS.flatMap((stop) =>
+	stop.problem ? [{ stop, p: problem(stop.problem), m: contestTimes(stop.problem) }] : [],
+);
+---
+
+<table class="problems">
+	<thead>
+		<tr>
+			<th scope="col">problem and chapter</th>
+			<th scope="col" class="n">ideal</th>
+			<th scope="col" class="n">SGLang</th>
+			<th scope="col" class="n">best</th>
+		</tr>
+	</thead>
+	<tbody>
+		{
+			rows.map(({ stop, p, m }) => (
+				<tr>
+					<td>
+						<a href={officialUrl(p.name)}>{p.name}</a>
+						<br />
+						<a href={href(stop)}>
+							{stop.label}. {stop.title.toLowerCase()}
+						</a>
+					</td>
+					<td class="n">{us(m.ideal)}</td>
+					<td class="n">{us(m.sglang)}</td>
+					<td class="n">
+						{m.best === undefined ? "–" : us(m.best)}
+						<br />
+						{m.speedup === undefined ? "" : times(m.speedup)}
+					</td>
+				</tr>
+			))
+		}
+	</tbody>
+</table>
+
+<style>
+	/* On a phone each problem takes a full line, with its three times beneath. */
+	@media (max-width: 30rem) {
+		.problems tr {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			border-bottom: 1px dashed var(--rule);
+		}
+		.problems th,
+		.problems td {
+			border-bottom: 0;
+			padding-right: 0.375rem;
+		}
+		.problems tr > :first-child {
+			grid-column: 1 / -1;
+			padding-bottom: 0;
+		}
+		.problems th:first-child {
+			display: none;
+		}
+		.problems td:first-child br {
+			display: none;
+		}
+		.problems td:first-child a:last-child::before {
+			content: " · ";
+			color: var(--ink-2);
+		}
+	}
+</style>

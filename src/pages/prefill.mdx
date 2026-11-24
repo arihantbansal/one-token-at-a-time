@@ -1,0 +1,124 @@
+---
+layout: ../layouts/Stop.astro
+slug: prefill
+description: Why the pause before a reply is short for what it reads, why writing a token costs a server more than reading one, and how servers reuse a conversation's cache and check drafts.
+---
+
+import Causal from "../components/Causal.astro";
+import DraftCheck from "../components/DraftCheck.astro";
+import Figure from "../components/Figure.astro";
+import InTheChallenge from "../components/InTheChallenge.astro";
+import LoadTable from "../components/LoadTable.astro";
+import Predict from "../components/Predict.astro";
+import Term from "../components/Term.astro";
+import TimeBars from "../components/TimeBars.astro";
+import { contestTimes, shapeFloor } from "../lib/challenge";
+import { count, microseconds, times, us } from "../lib/format";
+import {
+	ARITHMETIC_TOKENS_PER_SECOND,
+	BALANCE_POINT,
+	CONTEXT_TOKENS,
+	DRAFT_TOKENS,
+	H200,
+	LAYERS,
+	PREFILL_CHUNK,
+	SLIDING_WINDOW,
+	TURN_TOKENS,
+	floorUs,
+	getProjection,
+	kvBytes,
+	mathUs,
+	memoryUs,
+	projectionCost,
+	weightBytesPerGpu,
+} from "../lib/model";
+import {
+	draftCheckPasses,
+	fullLayerCacheBytes,
+	passUs,
+	promptTokenUs,
+	replyTokenUs,
+} from "../lib/serving";
+
+export const chunk = PREFILL_CHUNK;
+export const projection = getProjection("pooler");
+export const writing = projectionCost(projection, 1);
+export const reading = projectionCost(projection, chunk);
+export const balance = Math.round(BALANCE_POINT);
+export const turnUs = passUs("muse_prefill_layer", "turn 1");
+export const looks = (n) => (n * (n + 1)) / 2;
+export const firstChunk = shapeFloor("muse_prefill_layer", "first turn", "ctx 0, layer full");
+export const lateChunk = shapeFloor("muse_prefill_layer", "first turn", "ctx 65536, layer full");
+export const prefill = contestTimes("muse_prefill_layer");
+export const perConvCacheBytes =
+	fullLayerCacheBytes(CONTEXT_TOKENS) + LAYERS.sliding * kvBytes(CONTEXT_TOKENS, "sliding");
+export const conversationsBothCaches = Math.floor((H200.memoryGB * 1e9 - weightBytesPerGpu) / perConvCacheBytes);
+
+Every token of a prompt is known before the first pass starts, so all of them can share one read of the weights the way 32 people's tokens do. A reply cannot, because each token feeds the pass that chooses the next. Reading the prompt together is <Term id="prefill">prefill</Term>, and on this server long prompts are cut into chunks of {count(chunk)} tokens using <Term id="chunkedPrefill">chunked prefill</Term> so they can interleave cleanly with active replies.
+
+You can feel the difference from outside. Send a long message to a chatbot and there is a pause before the first word appears, then words stream steadily. That pause is <Term id="ttft">time to first token</Term> (TTFT), mostly spent reading your prompt. It is also the hardware reason AI APIs usually price output tokens several times higher than input tokens: prices reflect business choices too, yet the gap between reading in parallel and writing one token at a time is the underlying mechanism.
+
+## A prompt is its own batch
+
+Compare the layer's largest projection (`pooler`) writing one token against reading a {count(chunk)}-token chunk. Each pair uses its own horizontal scale, and the longer bar sets the ideal floor.
+
+<Figure surface="paper" label="writing against reading">
+	<TimeBars
+		scale="each"
+		cases={[
+			{ title: "writing one token", memoryUs: memoryUs(writing.bytes), mathUs: mathUs(writing.flops) },
+			{ title: `reading ${count(chunk)} tokens`, memoryUs: memoryUs(reading.bytes), mathUs: mathUs(reading.flops) },
+		]}
+	/>
+</Figure>
+
+The longer bar switches sides. Writing one token, moving data takes about {count(memoryUs(writing.bytes) / mathUs(writing.flops))} times as long as arithmetic. Reading {count(chunk)} tokens sits far past the {balance}-token ridge, making the step <Term id="computeBound">compute-bound</Term> and putting the tensor cores to work. Multiplying the token count by {count(chunk)} grows the projection's ideal time by only {count(floorUs(reading) / floorUs(writing))}×.
+
+Count it per token across all layers. At ideal floors, prefilling a {count(TURN_TOKENS)}-token follow-up message takes about {us(turnUs)}, or {microseconds(promptTokenUs)} per prompt token. Writing one reply token for a solo user takes {microseconds(replyTokenUs(1))}. Even shared across 32 users, each reply token costs about {microseconds(replyTokenUs(32))} of server time, {count(replyTokenUs(32) / promptTokenUs)} times a prompt token.
+
+The pause you feel is longer than {us(turnUs)}. Real kernels run slower than the roofline: the challenge measured <Term id="sglang">SGLang</Term>'s prefill kernels at about {times(prefill.sglang / prefill.ideal, 1)} the ideal. A busy server may also queue your message, read it in chunks between other people's decode passes, and spend milliseconds sending the first token back across the network.
+
+<Predict question={`The same ${count(TURN_TOKENS)}-token message arrives twice: once to open a new conversation, and once ${count(CONTEXT_TOKENS)} tokens into a long one. Which stage gets more arithmetic in the long conversation: the projections, attention, or both?`}>
+	<p>Only attention. The projections run the same weighted sums over the same {count(TURN_TOKENS)} new tokens either way. In every full-attention layer, each new token also scores and blends all {count(CONTEXT_TOKENS)} earlier cache entries. Sliding layers grow by less: in a new conversation early tokens see fewer than {count(SLIDING_WINDOW)} predecessors, whereas after a long one every token's window is full.</p>
+</Predict>
+
+## Each token sees only its past
+
+Although prefill reads prompt tokens together, each may attend only to itself and the tokens before it: token 500 sees the 499 before it and not token 501. The model was trained to predict each token strictly from its past, so obeying the same mask during prefill gives identical activations whether tokens are read together or written one by one. Drawn as a grid of which token sees which, that rule forms a triangle.
+
+<Figure surface="paper" label="which token sees which">
+	<Causal />
+</Figure>
+
+Eight tokens fill {looks(8)} squares; doubling to 16 fills {looks(16)}, nearly four times as many. In full-attention layers, attention's work grows quadratically with prompt length when reading a prompt from scratch.
+
+At real sizes, a {count(chunk)}-token chunk at the start of a conversation (`ctx 0`) takes at least {us(firstChunk)} in a full-attention layer. The same chunk arriving {count(65536)} tokens into a session takes at least {us(lateChunk)}, because each new token also attends over all {count(65536)} earlier entries. Sliding-window layers do not grow this way, since each token looks back at most {count(SLIDING_WINDOW)} tokens.
+
+<InTheChallenge problem="muse_prefill_layer">
+	<p>
+		<code>muse_prefill_layer</code> times a full layer at prefill sizes: one {count(TURN_TOKENS)}-token turn on an {count(CONTEXT_TOKENS)}-token context, four such turns at once, and a new conversation's opening prompt in {count(chunk)}-token chunks. Most of SGLang's time here goes to the experts, which group tokens by chosen expert and run variable-sized batched <Term id="gemm">GEMMs</Term> (a grouped GEMM). Because prefill runs before reply streaming, it has its own leaderboard outside the decode kernel ranking.
+	</p>
+	<LoadTable problem="muse_prefill_layer" />
+</InTheChallenge>
+
+## Keeping the cache between turns
+
+In a long conversation, why doesn't each new message re-prefill all {count(CONTEXT_TOKENS)} earlier tokens? The server keeps the conversation's cache in HBM after a reply finishes. When the next turn arrives, prefill skips the existing history and pushes only the {count(TURN_TOKENS)} new tokens through the weight tables, about {count(CONTEXT_TOKENS / TURN_TOKENS)} times fewer tokens through the projections (though those new tokens still attend back over the kept cache, and every later decode pass still reads it). Reusing past cache entries across turns is <Term id="promptCaching">prompt caching</Term>, which is why cached input tokens are cheaper to buy.
+
+It works across conversations too. Requests that start with identical text (such as a shared system prompt or tool definitions) produce identical cache entries for that prefix, so the server stores one shared copy. SGLang tracks reusable prefixes in a prefix tree called <Term id="radixAttention">RadixAttention</Term>. Shared prefixes are the one place two conversations ever share anything besides model weights.
+
+Kept caches take HBM whether users are actively streaming or idle, and raw remaining memory on each GPU holds at most about {count(conversationsBothCaches)} conversations of {count(CONTEXT_TOKENS)} tokens before buffers and non-layer weights. Servers therefore keep hot prefixes warm and evict stale ones when active batches need space.
+
+## Can one pass write more than one token?
+
+Batching pools tokens across users; prefill pools tokens across a prompt. To speed up a single user's reply stream, <Term id="speculative">speculative decoding</Term> uses a small, fast draft model to guess several tokens ahead, such as {DRAFT_TOKENS} tokens at once. Because all {DRAFT_TOKENS} tokens exist up front, the big model checks them together in one parallel verify pass, each position looking at the conversation plus earlier guesses. (In practice, a verify pass of {DRAFT_TOKENS} positions typically bundles the last accepted token with {DRAFT_TOKENS - 1} guesses so the big model can score every guess and still emit one bonus token if all {DRAFT_TOKENS - 1} match.)
+
+The big model accepts guesses up to the first disagreement, and because each position in a causal pass already predicts the next token, the last matching position yields the big model's own replacement token without a second pass. Guesses after the first mismatch are discarded. (The diagram shows greedy verification; when a server samples randomly, a lossless rejection-sampling rule keeps the big model's output distribution unchanged.)
+
+<Figure surface="paper" label="checking a draft">
+	<DraftCheck />
+</Figure>
+
+Three right guesses gave four tokens from one pass; a wrong first guess still gave one, the same as an ordinary decode pass. Checking an {DRAFT_TOKENS}-token verify pass costs about {draftCheckPasses.toFixed(1)}× the ideal time of a 1-token pass, mostly because {DRAFT_TOKENS} tokens activate more experts than one does. Add the draft model's own time, and speculative decoding pays off whenever acceptance rates clear that overhead. Hugging Face's [post on assisted generation](https://huggingface.co/blog/assisted-generation) animates the loop and measures real speedups.
+
+A server can spend its idle arithmetic on more people in each pass, on prompts, or on drafts. How much of the opening's {count(Math.round(ARITHMETIC_TOKENS_PER_SECOND / 1000) * 1000)} tokens a second does all of that win back?

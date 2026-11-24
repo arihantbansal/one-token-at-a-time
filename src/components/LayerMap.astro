@@ -1,0 +1,309 @@
+---
+// One layer of the model as a pipeline of steps, in plain words: what each step does and which
+// stop covers it.
+import { STOPS } from "../data/stops";
+import { count } from "../lib/format";
+import { D_EXPERT, HIDDEN, N_EXPERTS, SLIDING_WINDOW, TOP_K } from "../lib/model";
+
+type Op = {
+	id: string;
+	name: string;
+	/** The chapter that teaches the step, which is not always the one whose contest problem times it. */
+	slug: string;
+	what: string;
+	junction?: boolean;
+};
+
+const OPS: Op[] = [
+	{
+		id: "qkv",
+		name: "make query, key and value",
+		slug: "attention",
+		what: `Turns the token's ${count(HIDDEN)} numbers into the four things attention needs: a query, a key, a value and a gate.`,
+	},
+	{
+		id: "prep",
+		name: "mark position, save to cache",
+		slug: "attention",
+		what: "Normalizes the query and key, rotates them to encode position (on sliding layers), and saves the new key and value to the cache.",
+	},
+	{
+		id: "attn",
+		name: "attention",
+		slug: "attention",
+		what: `Compares the query with its own key and the keys of earlier tokens, then blends their values. Sliding layers look at the last ${count(SLIDING_WINDOW)} tokens; full layers at the whole conversation.`,
+	},
+	{
+		id: "o",
+		name: "bring attention's result back",
+		slug: "kernel",
+		what: `Turns attention's result back into ${count(HIDDEN)} numbers.`,
+	},
+	{
+		id: "add1",
+		name: "mix into the running total",
+		slug: "pass",
+		what: "Mixes attention's normalized result into the running total that flows through every layer, with a learned gate setting how much of each to keep. The next steps read a normalized copy.",
+		junction: true,
+	},
+	{
+		id: "router",
+		name: "choose experts",
+		slug: "experts",
+		what: `Scores all ${count(N_EXPERTS)} experts for this token; the top ${count(TOP_K)} are chosen.`,
+	},
+	{
+		id: "pooler",
+		name: "narrow for the experts",
+		slug: "kernel",
+		what: `Narrows the token to the ${count(D_EXPERT)} numbers the experts work on.`,
+	},
+	{
+		id: "experts",
+		name: "experts",
+		slug: "experts",
+		what: `Runs the token through those of its ${count(TOP_K)} chosen experts that live on this GPU, and combines their answers.`,
+	},
+	{
+		id: "unpooler",
+		name: "widen back",
+		slug: "kernel",
+		what: `Widens the result back to ${count(HIDDEN)} numbers.`,
+	},
+	{
+		id: "add2",
+		name: "mix into the running total",
+		slug: "pass",
+		what: "Mixes the experts' normalized result into the running total the same way. A normalized copy of the new total is the next layer's input.",
+		junction: true,
+	},
+];
+
+const items = OPS.map((op, i) => {
+	const stop = STOPS.find((s) => s.slug === op.slug);
+	if (!stop) throw new Error(`no chapter with slug "${op.slug}"`);
+	return { ...op, stop, selected: i === 0 };
+});
+---
+
+<okc-layer-map>
+	<div class="map">
+		<ol class="pipeline">
+			<li class="rail" aria-hidden="true">
+				<span>running total</span>
+			</li>
+			{items.map((op) => (
+				<li class:list={{ junction: op.junction }}>
+					<button type="button" aria-pressed={op.selected} data-op={op.id}>
+						<span class="name">{op.name}</span>
+						<span class="tag">chapter {op.stop.label}</span>
+					</button>
+				</li>
+			))}
+		</ol>
+		<div class="panel" aria-live="polite">
+			{items.map((op) => (
+				<div class="body" data-body={op.id} data-on={op.selected}>
+					<p class="pname">{op.name}</p>
+					<p class="what">{op.what}</p>
+					<p class="covered">
+						explained in <a href={`/${op.stop.slug}`}>chapter {op.stop.label}, {op.stop.title.toLowerCase()}</a>
+					</p>
+				</div>
+			))}
+		</div>
+	</div>
+</okc-layer-map>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+
+	/** On narrow screens the detail panel sits right under the selected step. */
+	const WIDE = "(min-width: 48rem)";
+
+	class LayerMap extends FigureElement {
+		setup() {
+			const map = this.$(".map");
+			const list = this.$("ol");
+			const panel = this.$(".panel");
+			const buttons = [...list.querySelectorAll<HTMLButtonElement>("button")];
+			const wide = matchMedia(WIDE);
+			const place = () => {
+				const current = buttons.find((b) => b.getAttribute("aria-pressed") === "true") ?? buttons[0];
+				const li = current.parentElement;
+				if (wide.matches) map.append(panel);
+				else li?.append(panel);
+			};
+			this.on(list, "click", (e) => {
+				const button = (e.target as Element).closest("button");
+				if (!button) return;
+				for (const b of buttons) b.setAttribute("aria-pressed", String(b === button));
+				for (const body of panel.querySelectorAll<HTMLElement>("[data-body]"))
+					body.dataset.on = String(body.dataset.body === button.dataset.op);
+				place();
+			});
+			wide.addEventListener("change", place);
+			this.onCleanup(() => wide.removeEventListener("change", place));
+			place();
+		}
+	}
+
+	define("okc-layer-map", LayerMap);
+</script>
+
+<style>
+	okc-layer-map {
+		display: block;
+		--rail: 2.5rem;
+	}
+
+	.map {
+		display: grid;
+		gap: 1.5rem;
+	}
+	@media (min-width: 48rem) {
+		.map {
+			grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+			gap: 2.5rem;
+			align-items: start;
+		}
+		.map > .panel {
+			position: sticky;
+			top: 4rem;
+		}
+	}
+	.pipeline {
+		position: relative;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: grid;
+		gap: 0.5rem;
+	}
+	.pipeline::before {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: calc(var(--rail) + 1.25rem);
+		border-left: 1px solid var(--rule);
+	}
+	.pipeline li {
+		position: relative;
+		margin: 0;
+		padding-left: var(--rail);
+	}
+	.rail {
+		position: absolute;
+		inset: 0 auto 0 0;
+		width: var(--rail);
+		padding: 0;
+		pointer-events: none;
+	}
+	.rail::before {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 1.25rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	.rail span {
+		position: absolute;
+		top: 0.5rem;
+		left: 0;
+		writing-mode: vertical-rl;
+		transform: rotate(180deg);
+		font-family: var(--mono);
+		font-size: 0.6875rem;
+		color: var(--ink-2);
+	}
+	.pipeline .junction::before {
+		content: "";
+		position: absolute;
+		top: 1.375rem;
+		left: 1.25rem;
+		width: calc(var(--rail) - 1.25rem);
+		border-top: 1px solid var(--ink-2);
+	}
+	.pipeline .junction::after {
+		content: "+";
+		position: absolute;
+		top: 1.375rem;
+		left: 1.25rem;
+		transform: translate(-50%, -50%);
+		padding: 0 0.15rem;
+		background: var(--paper-2);
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		line-height: 1;
+		color: var(--ink);
+	}
+	button {
+		position: relative;
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 1rem;
+		width: 100%;
+		min-height: 2.75rem;
+		padding: 0.6rem 0.75rem;
+		font: inherit;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		text-align: left;
+		color: var(--ink);
+		background: var(--paper);
+		border: 1px solid var(--ink);
+		cursor: pointer;
+		transition:
+			background-color var(--fast) var(--ease),
+			border-color var(--fast) var(--ease);
+	}
+	button:hover {
+		background: var(--paper-2);
+	}
+	button[aria-pressed="true"] {
+		background: var(--faint);
+		border-left: 3px solid var(--ink);
+		padding-left: calc(0.75rem - 2px);
+	}
+	.tag {
+		font-size: 0.6875rem;
+		color: var(--ink-2);
+		white-space: nowrap;
+	}
+	.panel {
+		display: grid;
+		padding: 1rem 1.25rem;
+		border: 1px solid var(--rule);
+		background: var(--paper);
+	}
+	.pipeline .panel {
+		margin-top: 0.5rem;
+	}
+	.body {
+		grid-area: 1 / 1;
+		visibility: hidden;
+	}
+	.body[data-on="true"] {
+		visibility: visible;
+	}
+	.panel p {
+		margin: 0 0 0.75rem;
+	}
+	.pname {
+		font-family: var(--mono);
+		font-size: 0.9375rem;
+	}
+	.what {
+		font-size: 1.0625rem;
+		line-height: 1.5;
+	}
+	.panel .covered {
+		margin: 0;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		color: var(--ink-2);
+	}
+</style>

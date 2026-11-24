@@ -1,0 +1,218 @@
+---
+// The twelve-weight projection cut among programs, then the real projection into the experts cut
+// into tiles of rows and handed to the compute blocks. Three frames, one change each.
+import { bytes, count, worked } from "../lib/format";
+import {
+	PROJ_BLOCK_K,
+	PROJ_BLOCK_N,
+	projectionGrid,
+	TOY_X2,
+	toyOutput2,
+	toyProgram,
+	toyTiles,
+} from "../lib/kernels";
+import { H200 } from "../lib/model";
+import { W, X } from "../lib/toy";
+import BlockGrid from "./BlockGrid.astro";
+
+type Frame = "programs" | "tiles" | "real" | "reuse";
+type Props = { show?: Frame[] };
+const { show = ["programs", "tiles", "real"] } = Astro.props;
+const rows = W.map((_, r) => toyProgram(r));
+const tiles = toyTiles(2);
+const real = projectionGrid("pooler");
+---
+
+<div class="tiled">
+	{show.includes("programs") && (<section>
+		<h3>one program for each output</h3>
+		<div class="toy">
+			<div class="xrow">
+				<span class="who">token's numbers</span>
+				<span class="cells">{X.map((x) => <span class="obj-work">{worked(x)}</span>)}</span>
+			</div>
+			{
+				rows.map((p) => (
+					<div class="prog">
+						<span class="who">program {p.row}</span>
+						<span class="cells">
+							{p.w.map((w) => (
+								<span class="obj-weight">{worked(w)}</span>
+							))}
+						</span>
+						<span class="out">
+							<span class="obj-work">{worked(p.y)}</span>
+						</span>
+					</div>
+				))
+			}
+		</div>
+	</section>)}
+
+	{show.includes("tiles") && (<section>
+		<h3>tiles of two rows: two programs</h3>
+		<div class="toy">
+			{
+				tiles.map((tile, program) => (
+					<div class="prog tile">
+						<span class="who">program {program}</span>
+						<span class="stack">
+							{tile.map(({ row, live }) =>
+								live ? (
+									<span class="line">
+										<span class="cells">
+											{W[row].map((w) => (
+												<span class="obj-weight">{worked(w)}</span>
+											))}
+										</span>
+										<span class="out">
+											<span class="obj-work">{worked(rows[row].y)}</span>
+										</span>
+									</span>
+								) : (
+									<span class="line ghost">
+										<span class="cells">
+											{W[0].map(() => (
+												<span class="cell-off" />
+											))}
+										</span>
+										<span class="masked">row {row}: past the edge, masked</span>
+									</span>
+								),
+							)}
+						</span>
+					</div>
+				))
+			}
+		</div>
+	</section>)}
+
+	{show.includes("real") && (<section>
+		<h3>the real size: into the experts</h3>
+		<p class="real">
+			{count(real.rows)} rows × {count(real.cols)} columns, in tiles of {PROJ_BLOCK_N} rows:
+			{" "}{count(real.programs)} programs, each reading {bytes(real.bytesPerProgram)} of weights,
+			{" "}{PROJ_BLOCK_K} columns at a time in {real.steps} steps
+		</p>
+		<BlockGrid busy={real.programs} label={`${count(real.programs)} programs on ${count(H200.sms)} compute blocks`} />
+	</section>)}
+	{show.includes("reuse") && (<section>
+		<h3>program 2 with two tokens: its weights read once, used by both</h3>
+		<div class="toy">
+			<div class="prog">
+				<span class="who">weights</span>
+				<span class="cells">{W[2].map((w) => <span class="obj-weight">{worked(w)}</span>)}</span>
+			</div>
+			{[{ name: "token 1", x: X, y: rows[2].y }, { name: "token 2", x: TOY_X2, y: toyOutput2(2) }].map((t) => (
+				<div class="xrow">
+					<span class="who">{t.name}</span>
+					<span class="cells">{t.x.map((x) => <span class="obj-work">{worked(x)}</span>)}</span>
+					<span class="out"><span class="obj-work">{worked(t.y)}</span></span>
+				</div>
+			))}
+		</div>
+	</section>)}
+</div>
+
+<style>
+	.tiled {
+		display: grid;
+		gap: 2rem;
+		max-width: 34rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	h3 {
+		margin: 0 0 0.75rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	p {
+		margin: 0 0 0.75rem;
+	}
+	.toy {
+		display: grid;
+		gap: 0.5rem;
+		--obj: 2.125rem;
+	}
+	.xrow,
+	.prog {
+		display: grid;
+		grid-template-columns: 5.25rem auto auto;
+		justify-content: start;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.prog {
+		padding: 0.375rem 0.5rem 0.375rem 0;
+		border: 1px dashed var(--ink-2);
+		border-left: 3px solid var(--ink);
+	}
+	.who {
+		padding-left: 0.5rem;
+		color: var(--ink);
+	}
+	.xrow .who {
+		color: var(--ink-2);
+	}
+	.cells {
+		display: flex;
+		gap: 3px;
+	}
+	.cells > * {
+		min-width: var(--obj);
+	}
+	.out {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.out::before {
+		content: "→";
+	}
+	.tile {
+		grid-template-columns: 5.25rem auto;
+	}
+	.stack {
+		display: grid;
+		gap: 3px;
+	}
+	.line {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.cell-off {
+		height: var(--obj);
+		border: 1px dashed var(--rule);
+	}
+	.masked {
+		max-width: 8rem;
+		font-size: 0.75rem;
+	}
+	@media (max-width: 26rem) {
+		.toy {
+			--obj: 1.75rem;
+		}
+		.toy .obj-weight,
+		.toy .obj-work {
+			font-size: 0.6875rem;
+		}
+		.xrow,
+		.prog,
+		.tile {
+			grid-template-columns: 1fr;
+			gap: 0.375rem;
+		}
+		.prog {
+			padding-left: 0;
+		}
+		.xrow .cells,
+		.prog > .cells,
+		.prog > .out,
+		.stack {
+			padding-left: 0.5rem;
+		}
+	}
+</style>

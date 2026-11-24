@@ -1,0 +1,326 @@
+---
+// One token routed, as a filmstrip: its working numbers meet the router, the router gives every
+// expert a score, the top scores win, and the winners' outputs are blended by their rescaled
+// scores. The scores and outputs are invented; the counts come from the model.
+import { count, hundredths, worked } from "../lib/format";
+import { D_EXPERT, N_EXPERTS, TOP_K } from "../lib/model";
+import { seeded } from "../lib/random";
+import { X } from "../lib/toy";
+
+const rand = seeded(311);
+const scores = Array.from({ length: N_EXPERTS }, () => 0.04 + 0.46 * rand() ** 1.6);
+const WINNERS = [0.91, 0.86, 0.79, 0.74, 0.7, 0.66, 0.63, 0.6].slice(0, TOP_K);
+const chosen: number[] = [];
+while (chosen.length < WINNERS.length) {
+	const e = Math.floor(rand() * N_EXPERTS);
+	if (!chosen.includes(e)) chosen.push(e);
+}
+chosen.forEach((e, i) => {
+	scores[e] = WINNERS[i];
+});
+
+// Shares rounded to hundredths that add to exactly 1.00 as shown (largest remainder).
+const total = WINNERS.reduce((a, b) => a + b, 0);
+const raw = WINNERS.map((s) => (s / total) * 100);
+const cents = raw.map(Math.floor);
+const order = raw.map((r, i) => [r - Math.floor(r), i]).sort((a, b) => b[0] - a[0]);
+const leftover = 100 - cents.reduce((a, b) => a + b, 0);
+for (let k = 0; k < leftover; k++) cents[order[k][1]]++;
+const shareTotal = cents.reduce((a, b) => a + b, 0);
+
+// Three numbers of each winner's output, invented whole numbers so every blended number is exact
+// in hundredths: each is the sum of share × output down its column.
+const OUTPUTS = [
+	[2, -1, 0],
+	[1, 3, -2],
+	[-1, 2, 1],
+	[3, 0, -1],
+	[0, -2, 2],
+	[2, 1, 1],
+	[-2, 1, 3],
+	[1, -1, 0],
+];
+const SHOWN = OUTPUTS[0].length;
+const minus = (v: string) => v.replace("-", "−");
+const blend = chosen.map((expert, i) => ({ expert, share: hundredths(cents[i]), out: OUTPUTS[i] }));
+const mixed = OUTPUTS[0].map((_, j) =>
+	minus(hundredths(OUTPUTS.reduce((sum, o, i) => sum + cents[i] * o[j], 0))),
+);
+
+// Five shades, low to high, so the score grid reads as a scale.
+const LEVELS = 5;
+const level = (s: number) => Math.min(LEVELS - 1, Math.floor(s * LEVELS));
+const ROUTER_CELLS = 48;
+const isChosen = new Set(chosen);
+---
+
+<ol class="film" aria-label={`Routing one token, with invented numbers: ${count(N_EXPERTS)} scores, the top ${TOP_K} chosen, their outputs blended`}>
+	<li class="frame">
+		<p class="step">the token's working numbers meet the router's weights</p>
+		<div class="row">
+			{X.map((x) => <span class="obj-work">{worked(x)}</span>)}
+			<span class="more">…</span>
+		</div>
+		<p class="join"><span class="obj-op" aria-hidden="true"></span> a small projection</p>
+		<div class="router" aria-hidden="true">
+			{Array.from({ length: ROUTER_CELLS }, () => <span class="obj-weight" />)}
+		</div>
+	</li>
+
+	<li class="frame">
+		<p class="step">out come {count(N_EXPERTS)} scores, one per expert</p>
+		<div class="scores" role="img" aria-label={`${count(N_EXPERTS)} scores, mostly low, a few high`}>
+			{scores.map((s) => <span class="s" data-level={level(s)} />)}
+		</div>
+		<p class="scale" aria-hidden="true">
+			low
+			{Array.from({ length: LEVELS }, (_, l) => <span class="s" data-level={l} />)}
+			high
+		</p>
+	</li>
+
+	<li class="frame">
+		<p class="step">the {TOP_K} highest win; the rest sit out</p>
+		<div class="scores" role="img" aria-label={`The ${TOP_K} highest scores are picked; the other ${count(N_EXPERTS - TOP_K)} experts sit out`}>
+			{scores.map((s, e) => <span class:list={["s", isChosen.has(e) ? "win" : "out"]} data-level={level(s)} />)}
+		</div>
+		<p class="scale" aria-hidden="true">
+			<span class="s win" data-level={LEVELS - 1}></span> runs
+			<span class="s out" data-level="0"></span> sits out
+		</p>
+	</li>
+
+	<li class="frame">
+		<p class="step">their outputs, blended by rescaled scores</p>
+		<table class="blend">
+			<caption class="visually-hidden">
+				Each chosen expert's share and three numbers of its made-up output; the blend is the sum of share × output in each column.
+			</caption>
+			<thead>
+				<tr>
+					<th scope="col">expert</th>
+					<th scope="col">share</th>
+					<th scope="col" colspan={SHOWN}>its output</th>
+				</tr>
+			</thead>
+			<tbody>
+				{
+					blend.map((b) => (
+						<tr>
+							<th scope="row">{b.expert}</th>
+							<td>{b.share}</td>
+							{b.out.map((v) => (
+								<td>
+									<span class="obj-work">{minus(String(v))}</span>
+								</td>
+							))}
+						</tr>
+					))
+				}
+			</tbody>
+			<tfoot>
+				<tr>
+					<th scope="row">blend</th>
+					<td>{hundredths(shareTotal)}</td>
+					{
+						mixed.map((v) => (
+							<td>
+								<span class="obj-work sum">{v}</span>
+							</td>
+						))
+					}
+				</tr>
+			</tfoot>
+		</table>
+		<p class="note">
+			blend: share × output, added down each column<br />outputs made up, {SHOWN} of {count(D_EXPERT)} numbers each
+		</p>
+	</li>
+</ol>
+
+<style>
+	.film {
+		display: grid;
+		gap: 1rem;
+		max-width: 46rem;
+		margin: 0 auto;
+		padding: 0;
+		list-style: none;
+		counter-reset: frame;
+		font: 0.8125rem/1.45 var(--mono);
+		color: var(--ink-2);
+	}
+	@media (min-width: 44rem) {
+		.film {
+			grid-template-columns: 1fr 1fr;
+		}
+	}
+	.frame {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.875rem 0.625rem 1.125rem;
+		border: 1px solid var(--rule);
+		border-radius: 8px;
+		background: var(--paper);
+		counter-increment: frame;
+	}
+	@media (min-width: 30rem) {
+		.frame {
+			padding-inline: 1rem;
+		}
+	}
+	p {
+		margin: 0;
+	}
+	.step {
+		align-self: stretch;
+		color: var(--ink);
+	}
+	/* The drawing sits in the middle of whatever height the row gives its frame. */
+	.step + * {
+		margin-top: auto;
+	}
+	.frame > :last-child {
+		margin-bottom: auto;
+	}
+	.step::before {
+		content: counter(frame) " ";
+		color: var(--ink-2);
+	}
+	.note,
+	.join,
+	.scale {
+		font-size: 0.75rem;
+	}
+	.note {
+		text-align: center;
+	}
+	.row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.row .obj-work {
+		--obj: 2.25rem;
+		min-width: 2.75rem;
+	}
+	.more {
+		padding-inline: 0.25rem;
+	}
+	.join {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.router {
+		display: grid;
+		grid-template-columns: repeat(12, 0.75rem);
+		gap: 3px;
+	}
+	.router .obj-weight {
+		--obj: 0.75rem;
+		min-width: 0;
+		border-width: 1px;
+	}
+	.scores {
+		display: grid;
+		grid-template-columns: repeat(16, minmax(0, 1fr));
+		gap: 3px;
+		width: min(100%, 13.5rem);
+	}
+	.s {
+		aspect-ratio: 1;
+		border-radius: 2px;
+		background: color-mix(in oklab, var(--ink) var(--shade), var(--paper));
+	}
+	.s[data-level="0"] {
+		--shade: 10%;
+	}
+	.s[data-level="1"] {
+		--shade: 28%;
+	}
+	.s[data-level="2"] {
+		--shade: 48%;
+	}
+	.s[data-level="3"] {
+		--shade: 72%;
+	}
+	.s[data-level="4"] {
+		--shade: 100%;
+	}
+	.s.out {
+		--shade: 10%;
+	}
+	.s.win {
+		--shade: 100%;
+		outline: 1.5px solid var(--ink);
+		outline-offset: 1.5px;
+	}
+	.scale {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.scale .s {
+		width: 0.75rem;
+	}
+	.scale .s:first-child,
+	.scale .out {
+		margin-left: 0.375rem;
+	}
+	.scale .s:last-child {
+		margin-right: 0.375rem;
+	}
+	.scale .win {
+		margin-inline: 0.125rem 0.25rem;
+	}
+	.blend {
+		width: auto;
+		margin: 0;
+		border-collapse: separate;
+		border-spacing: 0;
+	}
+	.blend th,
+	.blend td {
+		padding: 2px 0 2px 0.5rem;
+		border: 0;
+		text-align: right;
+		vertical-align: middle;
+		white-space: nowrap;
+		font-variant-numeric: tabular-nums;
+	}
+	.blend th:first-child {
+		padding-left: 0;
+	}
+	.blend thead th {
+		padding-bottom: 0.375rem;
+		font-size: 0.75rem;
+	}
+	.blend thead th:last-child {
+		text-align: center;
+	}
+	.blend tbody th {
+		color: var(--ink);
+	}
+	.blend td + td {
+		padding-left: 3px;
+	}
+	.blend td:nth-child(3) {
+		padding-left: 0.5rem;
+	}
+	.blend tfoot th,
+	.blend tfoot td {
+		padding-top: 0.5rem;
+		border-top: 1px solid var(--rule);
+		color: var(--ink);
+	}
+	.blend .obj-work {
+		--obj: 1.75rem;
+		min-width: 2.75rem;
+	}
+	.blend .sum {
+		border-width: 1.5px;
+	}
+</style>

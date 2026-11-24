@@ -1,0 +1,552 @@
+{
+	"fetchedAt": "2026-11-12T13:07:57.444Z",
+	"tracks": {
+		"kernels": {
+			"open": false,
+			"closes": "2026-11-05T00:00:00-08:00"
+		},
+		"serving": {
+			"open": false,
+			"opens": "2026-11-12T09:00:00-08:00",
+			"closes": "2026-11-20T00:00:00-08:00"
+		},
+		"ends": "2026-11-20T00:00:00-08:00",
+		"launch": "2026-10-22T11:00:00-07:00",
+		"phase": "between",
+		"note": "The kernel track has closed. The serving track opens Nov 12 at 9 am PT."
+	},
+	"servingLoads": [
+		1,
+		4,
+		16,
+		32
+	],
+	"problems": [
+		{
+			"name": "muse_bf16_proj",
+			"title": "Dense projections",
+			"computation": "# x: [m, k] BF16   W: [n, k] = weights[layer]\n# qkv_gate, o, pooler, unpooler: BF16; router: FP32\nout = x @ W.T  # [m, n], BF16 (router: FP32)",
+			"correctness": [
+				"The output, against an FP64 reference: at most 1%, and 0.01% for the router, whose outputs choose the experts. Splitting the router's FP32 weights into a BF16 hi + lo pair with FP32 accumulation, as SGLang does above 8 tokens, passes at any m; BF16 router weights alone don't.",
+				"Use the weights at their own precision (the router's hi + lo split aside). About one row in eight of x has a single nonzero entry, a power of two, so its output is a column of the weights, exact with the original weights and slightly off with the router's hi + lo split. Those rows must be within 0.1%."
+			],
+			"timing": [
+				"Each shape is captured as a CUDA graph and timed by replaying it, in the same run and on the same GPU as SGLang's kernel, your replays and SGLang's taking turns on the same fresh inputs.",
+				"Every timed replay starts with a cold L2: the judge reads a buffer larger than L2 just before it.",
+				"A shape's speedup is the median of paired ratios: each repetition's SGLang time over yours, taken two repetitions at a time with the order swapped, so which side went first cancels. Your time on the shape is SGLang's median time over that speedup.",
+				"Each run reports its speedup with a 95% interval (at least ±1.5%). Gains inside the interval might be noise.",
+				"The judge subtracts a graph replay's fixed cost (about 4 µs) from both sides."
+			],
+			"sglangUs": 4830.8,
+			"sglangPer": "decode step",
+			"shapes": [
+				{
+					"load": "decode 1",
+					"shape": "m 1, layer qkv_gate",
+					"weight": 62,
+					"floorUs": 7.9
+				},
+				{
+					"load": "decode 1",
+					"shape": "m 1, layer o",
+					"weight": 62,
+					"floorUs": 3.5
+				},
+				{
+					"load": "decode 1",
+					"shape": "m 1, layer pooler",
+					"weight": 62,
+					"floorUs": 14
+				},
+				{
+					"load": "decode 1",
+					"shape": "m 1, layer unpooler",
+					"weight": 62,
+					"floorUs": 1.7
+				},
+				{
+					"load": "decode 1",
+					"shape": "m 1, layer router",
+					"weight": 62,
+					"floorUs": 1.8
+				},
+				{
+					"load": "decode 16",
+					"shape": "m 16, layer qkv_gate",
+					"weight": 62,
+					"floorUs": 7.9
+				},
+				{
+					"load": "decode 16",
+					"shape": "m 16, layer o",
+					"weight": 62,
+					"floorUs": 3.6
+				},
+				{
+					"load": "decode 16",
+					"shape": "m 16, layer pooler",
+					"weight": 62,
+					"floorUs": 14.1
+				},
+				{
+					"load": "decode 16",
+					"shape": "m 16, layer unpooler",
+					"weight": 62,
+					"floorUs": 14.1
+				},
+				{
+					"load": "decode 16",
+					"shape": "m 16, layer router",
+					"weight": 62,
+					"floorUs": 1.8
+				},
+				{
+					"load": "decode 32",
+					"shape": "m 32, layer qkv_gate",
+					"weight": 62,
+					"floorUs": 8
+				},
+				{
+					"load": "decode 32",
+					"shape": "m 32, layer o",
+					"weight": 62,
+					"floorUs": 3.6
+				},
+				{
+					"load": "decode 32",
+					"shape": "m 32, layer pooler",
+					"weight": 62,
+					"floorUs": 14.1
+				},
+				{
+					"load": "decode 32",
+					"shape": "m 32, layer unpooler",
+					"weight": 62,
+					"floorUs": 14.1
+				},
+				{
+					"load": "decode 32",
+					"shape": "m 32, layer router",
+					"weight": 62,
+					"floorUs": 1.9
+				},
+				{
+					"load": "verify 1",
+					"shape": "m 8, layer qkv_gate",
+					"weight": 62,
+					"floorUs": 7.9
+				},
+				{
+					"load": "verify 1",
+					"shape": "m 8, layer o",
+					"weight": 62,
+					"floorUs": 3.5
+				},
+				{
+					"load": "verify 1",
+					"shape": "m 8, layer pooler",
+					"weight": 62,
+					"floorUs": 14
+				},
+				{
+					"load": "verify 1",
+					"shape": "m 8, layer unpooler",
+					"weight": 62,
+					"floorUs": 1.8
+				},
+				{
+					"load": "verify 1",
+					"shape": "m 8, layer router",
+					"weight": 62,
+					"floorUs": 1.8
+				},
+				{
+					"load": "verify 16",
+					"shape": "m 128, layer qkv_gate",
+					"weight": 62,
+					"floorUs": 8.4
+				},
+				{
+					"load": "verify 16",
+					"shape": "m 128, layer o",
+					"weight": 62,
+					"floorUs": 4
+				},
+				{
+					"load": "verify 16",
+					"shape": "m 128, layer pooler",
+					"weight": 62,
+					"floorUs": 14.6
+				},
+				{
+					"load": "verify 16",
+					"shape": "m 128, layer unpooler",
+					"weight": 62,
+					"floorUs": 14.6
+				},
+				{
+					"load": "verify 16",
+					"shape": "m 128, layer router",
+					"weight": 62,
+					"floorUs": 2.2
+				},
+				{
+					"load": "verify 32",
+					"shape": "m 256, layer qkv_gate",
+					"weight": 62,
+					"floorUs": 9.8
+				},
+				{
+					"load": "verify 32",
+					"shape": "m 256, layer o",
+					"weight": 62,
+					"floorUs": 4.5
+				},
+				{
+					"load": "verify 32",
+					"shape": "m 256, layer pooler",
+					"weight": 62,
+					"floorUs": 17.4
+				},
+				{
+					"load": "verify 32",
+					"shape": "m 256, layer unpooler",
+					"weight": 62,
+					"floorUs": 17.4
+				},
+				{
+					"load": "verify 32",
+					"shape": "m 256, layer router",
+					"weight": 62,
+					"floorUs": 2.7
+				}
+			],
+			"entrants": 1741,
+			"best": {
+				"speedup": 1.7276592188096174
+			}
+		},
+		{
+			"name": "muse_attention_decode",
+			"title": "Gated attention decode",
+			"computation": "# per request b and block token j, at position p = positions[t]\nq, k, v, gate = split(qkv[t])   # the fused projection output\nq = rmsnorm(q) * 5.473;  k = rmsnorm(k)\nq, k = rope(q, p), rope(k, p)   # sliding layers\ncache[cache_loc[t]] = fp8(k), fp8(v)\na = softmax(q @ K.T / 8) @ V    # up to p: window or all\nout = rmsnorm(a) * sigmoid(gate)",
+			"correctness": [
+				"The output: within 2.5× the reference's own error when its queries are rounded to FP8 E4M3, plus 1.5%, kept between 3% and 15%, against an FP32 reference.",
+				"The new cache entries: within 8% of the reference's. Your output is checked against the reference attending to your own new entries.",
+				"Some tests put keys at the window's edges.",
+				"Each head's keys share a direction, so attention spreads over many keys. On full layers the low-attention keys' values share a direction too."
+			],
+			"timing": [
+				"Each shape is captured as a CUDA graph and timed by replaying it, in the same run and on the same GPU as SGLang's kernel, your replays and SGLang's taking turns on the same fresh inputs.",
+				"Every timed replay starts with a cold L2: the judge reads a buffer larger than L2 just before it.",
+				"A shape's speedup is the median of paired ratios: each repetition's SGLang time over yours, taken two repetitions at a time with the order swapped, so which side went first cancels. Your time on the shape is SGLang's median time over that speedup.",
+				"Each run reports its speedup with a 95% interval (at least ±1.5%). Gains inside the interval might be noise.",
+				"The judge subtracts a graph replay's fixed cost (about 4 µs) from both sides."
+			],
+			"sglangUs": 3766.3,
+			"sglangPer": "decode step",
+			"shapes": [
+				{
+					"load": "decode 1",
+					"shape": "batch 1, ctx 80000, heads tp8, layer sliding, page 1, dist soft",
+					"weight": 46,
+					"floorUs": 0.1
+				},
+				{
+					"load": "decode 1",
+					"shape": "batch 1, ctx 80000, heads tp8, layer full, page 1, dist coherent",
+					"weight": 16,
+					"floorUs": 4.3
+				},
+				{
+					"load": "decode 16",
+					"shape": "batch 16, ctx 80000, heads tp8, layer sliding, page 1, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 1.6
+				},
+				{
+					"load": "decode 16",
+					"shape": "batch 16, ctx 80000, heads tp8, layer full, page 1, spread agentic, dist coherent",
+					"weight": 16,
+					"floorUs": 63.2
+				},
+				{
+					"load": "decode 32",
+					"shape": "batch 32, ctx 80000, heads tp8, layer sliding, page 1, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 3.3
+				},
+				{
+					"load": "decode 32",
+					"shape": "batch 32, ctx 80000, heads tp8, layer full, page 1, spread agentic, dist coherent",
+					"weight": 16,
+					"floorUs": 126.4
+				},
+				{
+					"load": "verify 1",
+					"shape": "batch 1, ctx 80000, heads tp8, layer sliding, page 1, q_len 8, dist soft",
+					"weight": 46,
+					"floorUs": 0.1
+				},
+				{
+					"load": "verify 1",
+					"shape": "batch 1, ctx 80000, heads tp8, layer full, page 1, q_len 8, dist coherent",
+					"weight": 16,
+					"floorUs": 4.3
+				},
+				{
+					"load": "verify 16",
+					"shape": "batch 16, ctx 80000, heads tp8, layer sliding, page 1, q_len 8, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 1.9
+				},
+				{
+					"load": "verify 16",
+					"shape": "batch 16, ctx 80000, heads tp8, layer full, page 1, q_len 8, spread agentic, dist coherent",
+					"weight": 16,
+					"floorUs": 63.4
+				},
+				{
+					"load": "verify 32",
+					"shape": "batch 32, ctx 80000, heads tp8, layer sliding, page 1, q_len 8, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 3.7
+				},
+				{
+					"load": "verify 32",
+					"shape": "batch 32, ctx 80000, heads tp8, layer full, page 1, q_len 8, spread agentic, dist coherent",
+					"weight": 16,
+					"floorUs": 126.8
+				}
+			],
+			"entrants": 1380,
+			"best": {
+				"speedup": 3.3389207412481454
+			}
+		},
+		{
+			"name": "muse_moe_w4a16",
+			"title": "Routed experts",
+			"computation": "# per token: its top 8 of 256 experts; only local ones here\nfor t, (e, g) in routes if e is local:\n    h = x[t] @ dequant(w13[e]).T\n    gate, up = split(h)\n    y = (silu(gate) * up) @ dequant(w2[e]).T\n    out[t] += g * rmsnorm(y * (1 + post_norm_w))",
+			"correctness": [
+				"The output, against an FP32 reference: at most 1.5%."
+			],
+			"timing": [
+				"Each shape is captured as a CUDA graph and timed by replaying it, in the same run and on the same GPU as SGLang's kernel, your replays and SGLang's taking turns on the same fresh inputs.",
+				"Every timed replay starts with a cold L2: the judge reads a buffer larger than L2 just before it.",
+				"A shape's speedup is the median of paired ratios: each repetition's SGLang time over yours, taken two repetitions at a time with the order swapped, so which side went first cancels. Your time on the shape is SGLang's median time over that speedup.",
+				"Each run reports its speedup with a 95% interval (at least ±1.5%). Gains inside the interval might be noise.",
+				"The judge subtracts a graph replay's fixed cost (about 4 µs) from both sides."
+			],
+			"sglangUs": 13448.5,
+			"sglangPer": "decode step",
+			"shapes": [
+				{
+					"load": "decode 1",
+					"shape": "bs 1, sharding ep8",
+					"weight": 60,
+					"floorUs": 11.4
+				},
+				{
+					"load": "decode 16",
+					"shape": "bs 16, sharding ep8",
+					"weight": 60,
+					"floorUs": 52.5
+				},
+				{
+					"load": "decode 32",
+					"shape": "bs 32, sharding ep8",
+					"weight": 60,
+					"floorUs": 70.8
+				},
+				{
+					"load": "verify 1",
+					"shape": "bs 8, sharding ep8",
+					"weight": 60,
+					"floorUs": 37.3
+				},
+				{
+					"load": "verify 16",
+					"shape": "bs 128, sharding ep8",
+					"weight": 60,
+					"floorUs": 101.3
+				},
+				{
+					"load": "verify 32",
+					"shape": "bs 256, sharding ep8",
+					"weight": 60,
+					"floorUs": 108.9
+				}
+			],
+			"entrants": 1423,
+			"best": {
+				"speedup": 2.843799916672147
+			}
+		},
+		{
+			"name": "muse_decode_layer",
+			"title": "Whole decoder layer",
+			"computation": "# x: attention input [T, 8192] BF16   s: residual stream FP32\nq, k, v, g = split(x @ qkv_gate.T);  QK-norm, RoPE, write fp8(k), fp8(v)\na = (rmsnorm(attention(q)) * sigmoid(g)) @ o.T     # all-reduce: identity\ns = α1 * s + β1 * rmsnorm(a);  h = rmsnorm(s) * (1 + w)\nexperts = top8(sigmoid(0.177 * h @ router.T) + bias)\ny = local experts(rmsnorm(h @ pooler.T) * (1 + w))  # all-reduce: identity\nf = y @ unpooler.T   # T ≤ 8: [y @ unpooler[:1024].T, 0, …, 0]\ns = α2 * s + β2 * rmsnorm(f * (1 + w))\nreturn rmsnorm(s) * (1 + w), s, experts",
+			"correctness": [
+				"The residual update (output stream − α1·α2 · input stream) and the next attention input, against an FP32 reference: within 2.5× the reference's own error when its queries are rounded to FP8, which comes to 3–15% depending on the shape.",
+				"The new cache entries: within 8% of the reference's."
+			],
+			"timing": [
+				"Each shape is captured as a CUDA graph and timed by replaying it, in the same run and on the same GPU as SGLang's kernel, your replays and SGLang's taking turns on the same fresh inputs.",
+				"Every timed replay starts with a cold L2: the judge reads a buffer larger than L2 just before it.",
+				"A shape's speedup is the median of paired ratios: each repetition's SGLang time over yours, taken two repetitions at a time with the order swapped, so which side went first cancels. Your time on the shape is SGLang's median time over that speedup.",
+				"Each run reports its speedup with a 95% interval (at least ±1.5%). Gains inside the interval might be noise.",
+				"The judge subtracts a graph replay's fixed cost (about 4 µs) from both sides."
+			],
+			"sglangUs": 22620.3,
+			"sglangPer": "decode step",
+			"shapes": [
+				{
+					"load": "decode 1",
+					"shape": "batch 1, ctx 80000, layer sliding, page 1, dist soft",
+					"weight": 46,
+					"floorUs": 40
+				},
+				{
+					"load": "decode 1",
+					"shape": "batch 1, ctx 80000, layer full, page 1, dist soft",
+					"weight": 16,
+					"floorUs": 44.2
+				},
+				{
+					"load": "decode 16",
+					"shape": "batch 16, ctx 80000, layer sliding, page 1, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 76.7
+				},
+				{
+					"load": "decode 16",
+					"shape": "batch 16, ctx 80000, layer full, page 1, spread agentic, dist soft",
+					"weight": 16,
+					"floorUs": 137.5
+				},
+				{
+					"load": "decode 32",
+					"shape": "batch 32, ctx 80000, layer sliding, page 1, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 84.5
+				},
+				{
+					"load": "decode 32",
+					"shape": "batch 32, ctx 80000, layer full, page 1, spread agentic, dist soft",
+					"weight": 16,
+					"floorUs": 208.1
+				},
+				{
+					"load": "verify 1",
+					"shape": "batch 1, ctx 80000, layer sliding, page 1, q_len 8, dist soft",
+					"weight": 46,
+					"floorUs": 62.3
+				},
+				{
+					"load": "verify 1",
+					"shape": "batch 1, ctx 80000, layer full, page 1, q_len 8, dist soft",
+					"weight": 16,
+					"floorUs": 66.4
+				},
+				{
+					"load": "verify 16",
+					"shape": "batch 16, ctx 80000, layer sliding, page 1, q_len 8, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 126.6
+				},
+				{
+					"load": "verify 16",
+					"shape": "batch 16, ctx 80000, layer full, page 1, q_len 8, spread agentic, dist soft",
+					"weight": 16,
+					"floorUs": 188.7
+				},
+				{
+					"load": "verify 32",
+					"shape": "batch 32, ctx 80000, layer sliding, page 1, q_len 8, spread agentic, dist soft",
+					"weight": 46,
+					"floorUs": 143.8
+				},
+				{
+					"load": "verify 32",
+					"shape": "batch 32, ctx 80000, layer full, page 1, q_len 8, spread agentic, dist soft",
+					"weight": 16,
+					"floorUs": 267.2
+				}
+			],
+			"entrants": 1297,
+			"best": {
+				"speedup": 2.614352808274751
+			}
+		},
+		{
+			"name": "muse_prefill_layer",
+			"title": "Prefill layer",
+			"computation": "# x: attention input [T, 8192] BF16   s: residual stream FP32\nq, k, v, g = split(x @ qkv_gate.T);  QK-norm, RoPE, write fp8(k), fp8(v)\na = (rmsnorm(attention(q)) * sigmoid(g)) @ o.T     # all-reduce: identity\ns = α1 * s + β1 * rmsnorm(a);  h = rmsnorm(s) * (1 + w)\nexperts = top8(sigmoid(0.177 * h @ router.T) + bias)\ny = local experts(rmsnorm(h @ pooler.T) * (1 + w))  # all-reduce: identity\nf = y @ unpooler.T   # T ≤ 8: [y @ unpooler[:1024].T, 0, …, 0]\ns = α2 * s + β2 * rmsnorm(f * (1 + w))\nreturn rmsnorm(s) * (1 + w), s, experts",
+			"correctness": [],
+			"timing": [
+				"Each shape is captured as a CUDA graph and timed by replaying it, in the same run and on the same GPU as SGLang's kernel, your replays and SGLang's taking turns on the same fresh inputs.",
+				"Every timed replay starts with a cold L2: the judge reads a buffer larger than L2 just before it.",
+				"A shape's speedup is the median of paired ratios: each repetition's SGLang time over yours, taken two repetitions at a time with the order swapped, so which side went first cancels. Your time on the shape is SGLang's median time over that speedup.",
+				"Each run reports its speedup with a 95% interval (at least ±1.5%). Gains inside the interval might be noise.",
+				"The judge subtracts a graph replay's fixed cost (about 4 µs) from both sides."
+			],
+			"sglangUs": 387403.9,
+			"sglangPer": "prefill load",
+			"shapes": [
+				{
+					"load": "turn 1",
+					"shape": "batch 1, ctx 80000, layer sliding, q_len 753, page 1, dist soft",
+					"weight": 46,
+					"floorUs": 257
+				},
+				{
+					"load": "turn 1",
+					"shape": "batch 1, ctx 80000, layer full, q_len 753, page 1, dist soft",
+					"weight": 16,
+					"floorUs": 496.7
+				},
+				{
+					"load": "turn 4",
+					"shape": "batch 4, ctx 80000, layer sliding, q_len 753, page 1, dist soft",
+					"weight": 46,
+					"floorUs": 1036.3
+				},
+				{
+					"load": "turn 4",
+					"shape": "batch 4, ctx 80000, layer full, q_len 753, page 1, dist soft",
+					"weight": 16,
+					"floorUs": 1992.4
+				},
+				{
+					"load": "first turn",
+					"shape": "batch 1, ctx 0, layer full, q_len 16384, page 1, dist soft",
+					"weight": 16,
+					"floorUs": 5518.4
+				},
+				{
+					"load": "first turn",
+					"shape": "batch 1, ctx 32768, layer sliding, q_len 16384, page 1, dist soft",
+					"weight": 138,
+					"floorUs": 5663.4
+				},
+				{
+					"load": "first turn",
+					"shape": "batch 1, ctx 32768, layer full, q_len 16384, page 1, dist soft",
+					"weight": 16,
+					"floorUs": 7710
+				},
+				{
+					"load": "first turn",
+					"shape": "batch 1, ctx 65536, layer full, q_len 16384, page 1, dist soft",
+					"weight": 16,
+					"floorUs": 9847.7
+				}
+			],
+			"entrants": 896,
+			"best": {
+				"speedup": 2.1470638260618298
+			}
+		}
+	]
+}

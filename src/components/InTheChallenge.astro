@@ -1,0 +1,84 @@
+---
+// Where the Open Kernel Challenge enters the story, folded by default: the main text stands
+// without it, and contest readers open it for the problem, its numbers and its rules.
+import { officialUrl, type ProblemName, problem } from "../lib/challenge";
+import { count, times, us } from "../lib/format";
+
+type Props = { problem?: ProblemName };
+const p = Astro.props.problem ? problem(Astro.props.problem) : undefined;
+// The contest says "decode step"; the guide calls it a pass.
+const per = p?.sglangPer === "decode step" ? "pass" : p?.sglangPer;
+---
+
+<details class="fold okc">
+	<summary>
+		<span class="fold-glyph" aria-hidden="true">◆</span>
+		<span>In the challenge</span>
+	</summary>
+	<div class="fold-body">
+	{
+		p && (
+			<>
+				<dl class="board">
+					<div>
+						<dt>problem</dt>
+						<dd>
+							<a href={officialUrl(p.name)}>{p.name}</a>
+						</dd>
+					</div>
+					<div>
+						<dt>SGLang</dt>
+						<dd>
+							{us(p.sglangUs)} per {per}
+						</dd>
+					</div>
+					{p.best && (
+						<div>
+							<dt>best entry</dt>
+							<dd>{times(p.best.speedup)} faster</dd>
+						</div>
+					)}
+					<div>
+						<dt>entries</dt>
+						<dd>{count(p.entrants)}</dd>
+					</div>
+				</dl>
+				<p class="board-note">
+					Times are for this problem's share of one {per}, on one GPU, combined across the contest's benchmark loads (geometric mean).
+				</p>
+			</>
+		)
+	}
+		<slot />
+	</div>
+</details>
+
+<style>
+	.fold-glyph {
+		font-size: 0.625rem;
+	}
+	.board {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 2rem;
+		margin: 0;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+	}
+	.board dt {
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.board dd {
+		margin: 0.15rem 0 0;
+		overflow-wrap: anywhere;
+	}
+	.board-note {
+		margin: 0.75rem 0 1rem;
+		padding-bottom: 0.875rem;
+		border-bottom: 1px dashed var(--rule);
+		font-family: var(--mono);
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+</style>

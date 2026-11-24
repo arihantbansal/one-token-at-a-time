@@ -1,0 +1,156 @@
+---
+// A filmstrip at toy sizes: one GPU's memory as sixteen blocks, the weights in half of them and each
+// conversation's cache in the rest. A newcomer waits until a finished reply frees room.
+type Block = "weights" | "free" | string;
+type Frame = { label: string; memory: Block[]; queue: string[] };
+
+const W: Block[] = Array(8).fill("weights");
+const FRAMES: Frame[] = [
+	{
+		label: "Dara's conversation needs 2 blocks and 1 is free, so she waits",
+		memory: [...W, "Asha", "Asha", "Asha", "Ben", "Ben", "Chen", "Chen", "free"],
+		queue: ["Dara"],
+	},
+	{
+		label: "Ben's reply ends and his cache is freed",
+		memory: [...W, "Asha", "Asha", "Asha", "free", "free", "Chen", "Chen", "free"],
+		queue: ["Dara"],
+	},
+	{
+		label: "Dara joins at the next pass",
+		memory: [...W, "Asha", "Asha", "Asha", "Dara", "Dara", "Chen", "Chen", "free"],
+		queue: [],
+	},
+];
+const describe = (f: Frame) => {
+	const people = [...new Set(f.memory.filter((b) => b !== "weights" && b !== "free"))];
+	const free = f.memory.filter((b) => b === "free").length;
+	return `Memory: 8 blocks of weights, caches for ${people.join(", ")}, ${free} free. ${f.queue.length ? `${f.queue.join(", ")} waiting.` : "Nobody waiting."}`;
+};
+---
+
+<ol class="film">
+	{
+		FRAMES.map((f, i) => (
+			<li class="frame">
+				<p class="label">
+					<span class="step">{i + 1}</span> {f.label}
+				</p>
+				<div class="row">
+					<div class="memory" role="img" aria-label={describe(f)}>
+						{f.memory.map((b) =>
+							b === "weights" ? (
+								<span class="obj-weight" />
+							) : b === "free" ? (
+								<span class="free" />
+							) : (
+								<span class="obj-cache">{b[0]}</span>
+							),
+						)}
+					</div>
+					<div class="queue">
+						<span class="tag">waiting</span>
+						{f.queue.length ? f.queue.map((q) => <span class="obj-cache waiting">{q[0]}</span>) : <span class="none">none</span>}
+					</div>
+				</div>
+			</li>
+		))
+	}
+</ol>
+<p class="key" aria-hidden="true">
+	<span><span class="obj-weight sample"></span> weights</span>
+	<span><span class="obj-cache sample">A</span> a cache, by person</span>
+	<span><span class="free sample"></span> free</span>
+</p>
+
+<style>
+	.film {
+		list-style: none;
+		display: grid;
+		gap: 1.25rem;
+		max-width: 40rem;
+		margin: 0 auto;
+		padding: 0;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.label {
+		margin-bottom: 0.5rem;
+		color: var(--ink);
+	}
+	.step {
+		display: inline-grid;
+		place-items: center;
+		width: 1.25rem;
+		height: 1.25rem;
+		margin-right: 0.375rem;
+		border: 1px solid var(--rule);
+		border-radius: 50%;
+		font-size: 0.6875rem;
+	}
+	.row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.75rem 1.5rem;
+	}
+	.memory {
+		display: grid;
+		grid-template-columns: repeat(8, 1.5rem);
+		gap: 3px;
+		padding: 0.375rem;
+		border: 1px solid var(--ink-2);
+	}
+	@media (min-width: 40rem) {
+		.memory {
+			grid-template-columns: repeat(16, 1.5rem);
+		}
+	}
+	.memory > span,
+	.queue .obj-cache {
+		--obj: 1.5rem;
+		min-width: 0;
+		width: 1.5rem;
+	}
+	.free {
+		display: block;
+		height: 1.5rem;
+		border: 1px dashed var(--rule);
+	}
+	.queue {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 6rem;
+	}
+	.waiting {
+		border-style: dashed;
+	}
+	.none {
+		color: var(--ink-2);
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1.25rem;
+		max-width: 40rem;
+		margin: 1.25rem auto 0;
+		font: 0.75rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.key > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.sample {
+		--obj: 1rem;
+		width: 1rem;
+		min-width: 0;
+		height: 1rem;
+		font-size: 0.625rem;
+	}
+</style>

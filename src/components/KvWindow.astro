@@ -1,0 +1,135 @@
+---
+// One long conversation's cache in one layer, drawn to scale twice: what a sliding layer reads
+// for one new token, and what a full layer reads.
+import { count } from "../lib/format";
+import { CONTEXT_TOKENS, KV_SIZE, kvBytes, SLIDING_WINDOW } from "../lib/model";
+
+const TICKS = 4;
+const entries = (layer: "sliding" | "full") => kvBytes(CONTEXT_TOKENS, layer) / (KV_SIZE * 2);
+const layers = [
+	{ name: "sliding layer", read: entries("sliding"), note: `the latest ${count(entries("sliding"))}` },
+	{ name: "full layer", read: entries("full"), note: `all ${count(entries("full"))}` },
+];
+const ticks = Array.from({ length: TICKS + 1 }, (_, i) => (CONTEXT_TOKENS / TICKS) * i);
+---
+
+<div class="kv">
+	<p class="legend">
+		<span><span class="obj-cache" style="--obj: 0.875rem" aria-hidden="true"></span> cache, one entry per token, oldest on the left</span>
+		<span class="bytes"><span aria-hidden="true">■ </span>read for one new token</span>
+	</p>
+	{
+		layers.map((l) => (
+			<section class="layer">
+				<h3>
+					{l.name} <span>reads {l.note}</span>
+				</h3>
+				<div
+					class="bar obj-cache"
+					role="img"
+					aria-label={`${count(CONTEXT_TOKENS)} cache entries; the ${l.name} reads ${l.note}.`}
+				>
+					<i style={`--w: ${l.read / CONTEXT_TOKENS}`} />
+				</div>
+			</section>
+		))
+	}
+	<div class="scale" aria-hidden="true">
+		{
+			ticks.map((t) => (
+				<span style={`--at: ${t / CONTEXT_TOKENS}`} data-edge={t === 0 ? "start" : t === CONTEXT_TOKENS ? "end" : undefined}>
+					{t === 0 ? "0" : `${count(t / 1000)}k`}
+				</span>
+			))
+		}
+	</div>
+	<p class="unit">tokens in the conversation; the window is {count(SLIDING_WINDOW)} tokens</p>
+</div>
+
+<style>
+	.kv {
+		max-width: 38rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem 1.25rem;
+		margin: 0 0 1.25rem;
+		font-size: 0.75rem;
+	}
+	.legend > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.layer + .layer {
+		margin-top: 1rem;
+	}
+	h3 {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 0 1rem;
+		margin: 0 0 0.375rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	h3 span {
+		color: var(--bytes-ink);
+	}
+	.bar {
+		display: block;
+		position: relative;
+		height: 1.5rem;
+	}
+	/* The read part ends at the newest token, on the right. */
+	.bar i {
+		position: absolute;
+		inset: 0 0 0 auto;
+		width: max(3px, calc(var(--w) * 100%));
+		background: var(--bytes);
+	}
+	.scale {
+		position: relative;
+		height: 1.25rem;
+		margin: 0.5rem 0 0;
+		border-top: 1px solid var(--ink-2);
+		font-size: 0.75rem;
+	}
+	.scale span {
+		position: absolute;
+		left: calc(var(--at) * 100%);
+		top: 0.25rem;
+		transform: translateX(-50%);
+		font-variant-numeric: tabular-nums;
+	}
+	.scale [data-edge="start"] {
+		transform: none;
+	}
+	.scale [data-edge="end"] {
+		transform: translateX(-100%);
+	}
+	.scale span::before {
+		content: "";
+		position: absolute;
+		left: 50%;
+		top: -0.5rem;
+		height: 0.25rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	.scale [data-edge="start"]::before {
+		left: 0;
+	}
+	.scale [data-edge="end"]::before {
+		left: auto;
+		right: 0;
+	}
+	.unit {
+		margin: 0.5rem 0 0;
+		font-size: 0.75rem;
+		text-align: center;
+	}
+</style>

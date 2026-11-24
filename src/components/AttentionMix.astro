@@ -1,0 +1,283 @@
+---
+// A worked attention step over three tokens, small enough to check by hand. Every number shown
+// is computed from the rounded numbers shown before it, so each sum checks as displayed.
+import { attend, pair, QUERIES, TOKENS } from "../lib/attentionMix";
+import Seg from "./Seg.astro";
+
+const first = attend(QUERIES[0]);
+---
+
+<okc-attention-mix>
+	<div class="controls">
+		<Seg
+			name="query"
+			label="bank's query"
+			options={QUERIES.map((q) => ({ value: q.join(","), label: pair(q) }))}
+			value={QUERIES[0].join(",")}
+		/>
+	</div>
+
+	<table>
+		<caption class="visually-hidden">Attention over three tokens for the chosen query</caption>
+		<thead>
+			<tr>
+				<th scope="col">token</th>
+				<th scope="col" class="bytes">key</th>
+				<th scope="col" class="math">score</th>
+				<th scope="col" class="math">share</th>
+				<th scope="col" class="bytes">value</th>
+				<th scope="col" class="math">share × value</th>
+			</tr>
+		</thead>
+		<tbody>
+			{
+				TOKENS.map((t, j) => (
+					<tr data-row>
+						<th scope="row">{t.word}</th>
+						<td class="bytes" data-label="key">
+							{pair(t.key)}
+						</td>
+						<td class="math" data-label="score">
+							<span data-score>{first.rows[j].score}</span>
+						</td>
+						<td class="math" data-label="share">
+							<span data-share>{first.rows[j].share}</span>
+							<span class="bar" aria-hidden="true">
+								<i data-bar style={`width: ${first.rows[j].width}`} />
+							</span>
+						</td>
+						<td class="bytes" data-label="value">
+							{pair(t.value)}
+						</td>
+						<td class="math" data-label="share × value" data-product>
+							{first.rows[j].product}
+						</td>
+					</tr>
+				))
+			}
+		</tbody>
+		<tfoot>
+			<tr>
+				<th scope="row" colspan="3">total of shares</th>
+				<td class="math" data-total>{first.total}</td>
+				<td class="sum-label">blend</td>
+				<td class="math" data-blend>{first.blend}</td>
+			</tr>
+		</tfoot>
+	</table>
+
+	<p class="note" aria-live="polite" data-note>{first.note}</p>
+
+	<details class="softmax">
+		<summary>show the softmax arithmetic</summary>
+		<p>e<sup>score</sup>, divided by the total of all three</p>
+		<ol>
+			{
+				TOKENS.map((t, j) => (
+					<li data-softmax>
+						{t.word}: e<sup>{first.rows[j].power}</sup> = {first.rows[j].exp};
+						<span>
+							{" "}÷ {first.expTotal} = {first.rows[j].share}
+						</span>
+					</li>
+				))
+			}
+		</ol>
+	</details>
+</okc-attention-mix>
+
+<script>
+	import { attend } from "../lib/attentionMix";
+	import { define, FigureElement } from "../lib/figure";
+
+	class AttentionMix extends FigureElement {
+		setup() {
+			this.draw([1, 0], false);
+			this.onSeg("query", (v) => this.draw(v.split(",").map(Number), true));
+			this.whenVisible(() => this.draw([1, 0], true));
+		}
+
+		/** Bars start empty and grow to their shares, once on view and on every new query. */
+		draw(query: number[], showBars: boolean) {
+			const step = attend(query);
+			this.querySelectorAll("[data-row]").forEach((row, j) => {
+				const r = step.rows[j];
+				this.$("[data-score]", row).textContent = r.score;
+				this.$("[data-share]", row).textContent = r.share;
+				this.$("[data-bar]", row).style.width = showBars ? r.width : "0%";
+				this.$("[data-product]", row).textContent = r.product;
+			});
+			this.querySelectorAll("[data-softmax]").forEach((line, j) => {
+				const r = step.rows[j];
+				const power = document.createElement("sup");
+				power.textContent = r.power;
+				const divide = document.createElement("span");
+				divide.textContent = ` ÷ ${step.expTotal} = ${r.share}`;
+				line.replaceChildren(`${r.word}: e`, power, ` = ${r.exp};`, divide);
+			});
+			this.$("[data-total]").textContent = step.total;
+			this.$("[data-blend]").textContent = step.blend;
+			const note = this.$("[data-note]");
+			if (note.textContent !== step.note) note.textContent = step.note;
+		}
+	}
+
+	define("okc-attention-mix", AttentionMix);
+</script>
+
+<style>
+	okc-attention-mix {
+		display: block;
+	}
+	table {
+		width: 100%;
+		margin: 1.25rem 0 0;
+		border-collapse: collapse;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		font-variant-numeric: tabular-nums;
+	}
+	th,
+	td {
+		padding: 0.4rem 0.35rem;
+		border-bottom: 1px solid var(--rule);
+		text-align: left;
+		vertical-align: top;
+		font-weight: normal;
+		white-space: nowrap;
+	}
+	thead th {
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	tfoot th,
+	tfoot td {
+		border-bottom: 0;
+	}
+	tfoot th,
+	.sum-label {
+		color: var(--ink-2);
+	}
+	.bar {
+		display: block;
+		width: 9rem;
+		height: 6px;
+		margin-top: 0.3rem;
+		background: var(--faint);
+	}
+	.bar i {
+		display: block;
+		height: 100%;
+		background: var(--math);
+		transition: width 320ms var(--ease);
+	}
+	.softmax {
+		margin: 0.75rem 0 0;
+		padding-top: 0.75rem;
+		border-top: 1px dashed var(--rule);
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		line-height: 1.6;
+		color: var(--math-ink);
+	}
+	.softmax summary {
+		width: fit-content;
+		min-height: 2.25rem;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--ink-2);
+		cursor: pointer;
+		list-style: none;
+	}
+	.softmax summary::-webkit-details-marker {
+		display: none;
+	}
+	.softmax summary::before {
+		content: "▸";
+		transition: rotate var(--fast) var(--ease);
+	}
+	.softmax[open] summary::before {
+		rotate: 90deg;
+	}
+	.softmax summary:hover {
+		color: var(--ink);
+	}
+	.softmax p {
+		margin: 0.25rem 0;
+		color: var(--ink-2);
+	}
+	.softmax ol {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	.note {
+		margin: 1rem 0 0;
+		min-height: 4.5em;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		color: var(--ink);
+	}
+	/* Narrow: each token becomes a small card of labelled lines, so nothing is hidden. */
+	@media (max-width: 40rem) {
+		.note {
+			min-height: 6em;
+		}
+		thead {
+			display: none;
+		}
+		tbody,
+		tbody tr,
+		tfoot,
+		tfoot tr {
+			display: block;
+		}
+		tbody tr {
+			padding: 0.5rem 0;
+			border-bottom: 1px solid var(--rule);
+		}
+		tbody th,
+		tbody td {
+			display: grid;
+			grid-template-columns: 7.5rem 1fr;
+			padding: 0.1rem 0;
+			border: 0;
+		}
+		tbody th {
+			display: block;
+			color: var(--ink);
+		}
+		tbody td::before {
+			content: attr(data-label);
+			color: var(--ink-2);
+		}
+		tbody td .bar {
+			grid-column: 2;
+			width: min(100%, 9rem);
+		}
+		tfoot tr {
+			display: grid;
+			grid-template-columns: 7.5rem 1fr;
+			padding-top: 0.5rem;
+		}
+		tfoot th,
+		tfoot td {
+			padding: 0.1rem 0;
+		}
+		tfoot th {
+			white-space: normal;
+			padding-right: 0.5rem;
+		}
+		.softmax li :global(span) {
+			display: block;
+			padding-left: 2ch;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.bar i {
+			transition: none;
+		}
+	}
+</style>

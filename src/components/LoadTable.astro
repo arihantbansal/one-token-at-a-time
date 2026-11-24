@@ -1,0 +1,45 @@
+---
+// A problem's timed loads in plain words, with each load's best possible time.
+import { loadFloors, type ProblemName, problem } from "../lib/challenge";
+import { count, us } from "../lib/format";
+import { DRAFT_TOKENS, PREFILL_CHUNK, TURN_TOKENS } from "../lib/model";
+
+type Props = { problem: ProblemName };
+const loads = loadFloors(Astro.props.problem);
+// The contest says "decode step"; the guide calls it a pass.
+const sglangPer = problem(Astro.props.problem).sglangPer;
+const per = sglangPer === "decode step" ? "pass" : sglangPer;
+
+const MEANING: Record<string, string> = {
+	"decode 1": "one person, one new token",
+	"decode 16": "16 people, one new token each",
+	"decode 32": "32 people, one new token each",
+	"verify 1": `one person, checking an ${DRAFT_TOKENS}-token draft`,
+	"verify 16": `16 people, checking ${DRAFT_TOKENS}-token drafts`,
+	"verify 32": `32 people, checking ${DRAFT_TOKENS}-token drafts`,
+	"turn 1": `one turn of ${count(TURN_TOKENS)} new tokens`,
+	"turn 4": "four such turns at once",
+	"first turn": `a new conversation, read in ${count(PREFILL_CHUNK)}-token chunks`,
+};
+---
+
+<table>
+	<thead>
+		<tr>
+			<th scope="col">load</th>
+			<th scope="col">what it is</th>
+			<th scope="col" class="n">best possible, per {per}</th>
+		</tr>
+	</thead>
+	<tbody>
+		{
+			loads.map((l) => (
+				<tr>
+					<td>{l.load}</td>
+					<td>{MEANING[l.load] ?? ""}</td>
+					<td class="n">{us(l.us)}</td>
+				</tr>
+			))
+		}
+	</tbody>
+</table>

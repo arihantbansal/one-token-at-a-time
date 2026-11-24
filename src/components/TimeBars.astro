@@ -1,0 +1,168 @@
+---
+import { microseconds } from "../lib/format";
+
+// The two lower bounds on a step, drawn from the same starting point: the time to move its
+// bytes and the time to do its arithmetic. The two can overlap, so the longer one sets the
+// shortest time the step could take. `scale="each"` sizes each case to itself, for cases whose
+// times differ by orders of magnitude.
+
+type Case = { title: string; memoryUs: number; mathUs: number };
+type Props = { cases: Case[]; scale?: "shared" | "each" };
+const { cases, scale = "shared" } = Astro.props;
+
+const longest = Math.max(...cases.flatMap((c) => [c.memoryUs, c.mathUs]));
+const rows = cases.map((c) => {
+	const full = scale === "shared" ? longest : Math.max(c.memoryUs, c.mathUs);
+	const pass = Math.max(c.memoryUs, c.mathUs);
+	return {
+		...c,
+		pass,
+		memory: c.memoryUs / full,
+		math: c.mathUs / full,
+		limit: c.memoryUs >= c.mathUs ? "memory" : "math",
+	};
+});
+---
+
+<div class="cases">
+	{
+		rows.map((r) => (
+			<section class="case">
+				<h3>{r.title}</h3>
+				<div class="bar" data-sets={r.limit === "memory"}>
+					<span class="what bytes"><span aria-hidden="true">■ </span>moving data</span>
+					<span class="track" aria-hidden="true">
+						<i class="fill bytes" style={`--w: ${r.memory}`} />
+					</span>
+					<span class="t">{microseconds(r.memoryUs)}</span>
+				</div>
+				<div class="bar" data-sets={r.limit === "math"}>
+					<span class="what math"><span aria-hidden="true">● </span>arithmetic</span>
+					<span class="track" aria-hidden="true">
+						<i class="fill math" style={`--w: ${r.math}`} />
+					</span>
+					<span class="t">{microseconds(r.mathUs)}</span>
+				</div>
+				<p class="pass">
+					takes at least <b>{microseconds(r.pass)}</b>
+				</p>
+			</section>
+		))
+	}
+	<p class="scale">
+		{
+			scale === "shared" ? (
+				<>
+					<span class="axis" aria-hidden="true">
+						<span>0</span>
+						<span>{microseconds(longest)}</span>
+					</span>
+					<span class="said">every bar on one scale, 0 to {microseconds(longest)}</span>
+				</>
+			) : (
+				<span class="said">each case drawn to its own scale, its longer bar full width</span>
+			)
+		}
+	</p>
+</div>
+
+<style>
+	.scale {
+		display: grid;
+		grid-template-columns: 8.5rem 1fr 4.5rem;
+		gap: 0.25rem 0.75rem;
+		margin: -0.75rem 0 0;
+		font-size: 0.75rem;
+	}
+	.axis {
+		grid-column: 2;
+		display: flex;
+		justify-content: space-between;
+		padding-top: 0.25rem;
+		border-top: 1px solid var(--ink-2);
+		font-variant-numeric: tabular-nums;
+	}
+	.said {
+		grid-column: 1 / -1;
+	}
+	@media (max-width: 30rem) {
+		.scale {
+			grid-template-columns: 1fr;
+		}
+		.axis {
+			grid-column: 1;
+		}
+	}
+	.cases {
+		display: grid;
+		gap: 1.75rem;
+		max-width: 38rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	.bar {
+		display: grid;
+		grid-template-columns: 8.5rem 1fr 4.5rem;
+		align-items: center;
+		gap: 0.75rem;
+		min-height: 1.75rem;
+	}
+	.track {
+		height: 0.875rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	.fill {
+		display: block;
+		height: 100%;
+		width: max(2px, calc(var(--w) * 100%));
+	}
+	.fill.bytes {
+		background: var(--bytes);
+	}
+	.fill.math {
+		background: var(--math);
+	}
+	.what.bytes {
+		color: var(--bytes-ink);
+	}
+	.what.math {
+		color: var(--math-ink);
+	}
+	.t {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	[data-sets="true"] .t {
+		color: var(--ink);
+	}
+	.pass {
+		margin: 0.375rem 0 0;
+		text-align: right;
+	}
+	b {
+		font-weight: inherit;
+		color: var(--ink);
+	}
+	@media (max-width: 30rem) {
+		.bar {
+			grid-template-columns: 1fr 4.5rem;
+			grid-template-areas: "what t" "track track";
+			row-gap: 0.25rem;
+		}
+		.what {
+			grid-area: what;
+		}
+		.t {
+			grid-area: t;
+		}
+		.track {
+			grid-area: track;
+		}
+	}
+</style>

@@ -1,0 +1,82 @@
+---
+layout: ../layouts/Stop.astro
+slug: pass
+description: What one pass through a language model computes, from a token's lookup through weighted sums and 62 layers to a score for every possible next token.
+---
+
+import Figure from "../components/Figure.astro";
+import Key from "../components/Key.astro";
+import OneOutput from "../components/OneOutput.astro";
+import PassPath from "../components/PassPath.astro";
+import Predict from "../components/Predict.astro";
+import Term from "../components/Term.astro";
+import TwelveWeights from "../components/TwelveWeights.astro";
+import { count, us, worked } from "../lib/format";
+import { ACTIVE_WEIGHTS, GPUS, H200, HIDDEN, LAYERS, TOTAL_WEIGHTS, getProjection } from "../lib/model";
+import { output, X } from "../lib/toy";
+import { REPLY } from "../lib/tokenLoop";
+
+export const ops = 2 * ACTIVE_WEIGHTS;
+export const fleet = GPUS * H200.flopsPerSecond;
+export const mathOnly = (ops / fleet) * 1e6;
+export const pooler = getProjection("pooler");
+export const billions = (n) => count(n / 1e9);
+export const word = REPLY[0].trim();
+
+From weights alone, writing one token takes about {billions(ops)} billion arithmetic operations, and nearly all of them repeat one small calculation: multiply a number by a weight and add the product to a running sum. The rest of a <Term id="pass">pass</Term> (rescaling lists of numbers, a few nonlinear functions, and choosing the next token) takes a small share until conversations grow long.
+
+## A token becomes numbers
+
+Arithmetic needs numbers, so a pass begins with a lookup. Every token in the model's vocabulary has an integer ID, and that ID picks one row from a table learned during training. For "{word}", that row is a list of {count(HIDDEN)} numbers. No single entry stands for a concept a person would name; whatever the model learned about "{word}" is spread across all {count(HIDDEN)} numbers together.
+
+Those {count(HIDDEN)} numbers change at every step of the pass and are discarded once the next token is picked. Throughout this guide we call them the token's <Term id="activations">working numbers</Term> (or activations; in linear algebra, a vector). Four numbers instead of {count(HIDDEN)} are enough to see how they move: {X.map(worked).join(", ")}.
+
+## One weighted sum
+
+The step a pass repeats most is a weighted sum: multiply each working number by a matching weight and add up the products. The <Term id="weights">weights</Term> are the second kind of number in a pass. Fixed in training and shared across every token and every user, each weight has to be read from memory before the chip can use it.
+
+<Figure surface="paper" label="one weighted sum">
+	<OneOutput />
+</Figure>
+
+Four weights turned four input numbers into one output, {worked(output(0))}. Each weight did two operations: one multiplication and one addition, the opening's two operations per weight. From here on, figures draw each weight as <Key as="bytes">a square</Key> (moving data from memory) and each operation as <Key as="math">a dot</Key> (arithmetic).
+
+## Twelve weights
+
+One weighted sum produces one number, while a layer usually needs a whole new list. To make three outputs, the step runs three weighted sums over the same four input numbers, each with its own row of four weights.
+
+<Figure surface="paper" label="the twelve-weight projection">
+	<TwelveWeights />
+</Figure>
+
+Twelve weights, read once each, turned four numbers into three. Arranged as three rows of four, the weights form a matrix, and the step multiplies that 3 × 4 matrix by a 4-number vector to produce a 3-number vector. That operation is a <Term id="projection">projection</Term>, and projections are most of what a language model computes.
+
+The model's own projections keep that shape at larger sizes. One projection in Muse Spark Open takes in {count(HIDDEN)} working numbers and gives out {count(pooler.rows)}. Its matrix is {count(pooler.rows)} × {count(pooler.cols)}, more than {count(Math.floor((pooler.rows * pooler.cols) / 1e6))} million weights instead of twelve.
+
+## Layers
+
+Projections are grouped into a repeating <Term id="layer">layer</Term>: several projections around two main stages, <Term id="attention">attention</Term> (which looks back over earlier tokens) and a block of experts that works on each token on its own. Muse Spark Open repeats that recipe {LAYERS.total} times in order. Each layer has its own weights, totaling {billions(TOTAL_WEIGHTS)} billion across the model.
+
+What comes out of layer {LAYERS.total} is still a list of {count(HIDDEN)} numbers. How does that list become the next token?
+
+<Figure surface="paper" label="one pass">
+	<PassPath />
+</Figure>
+
+One final projection turns those {count(HIDDEN)} numbers into a score for every token in the vocabulary, and the server picks one. Always taking the highest score is greedy decoding; more often, servers sample at random with higher-scoring tokens more likely, so the same prompt does not always produce the same reply. Hugging Face's [guide to generation strategies](https://huggingface.co/docs/transformers/generation_strategies) covers the common sampling methods. The chosen token's ID turns back into text for you and feeds into the next pass.
+
+A single pass does not use all {billions(TOTAL_WEIGHTS)} billion weights. Meta's count for one token is about {billions(ACTIVE_WEIGHTS)} billion, and the other {billions(TOTAL_WEIGHTS - ACTIVE_WEIGHTS)} billion are never read for it.
+
+<Predict question={`Each of those ${billions(ACTIVE_WEIGHTS)} billion active weights does one multiplication and one addition. How long would ${GPUS} H200s, at ${count(H200.flopsPerSecond / 1e12)} trillion operations a second each, take to finish the weight arithmetic for one token?`}>
+	<p>
+		That comes to {billions(ops)} billion operations. Together the {GPUS} chips deliver {count(fleet / 1e12)} trillion operations a second, so the weight math itself takes about {us(mathOnly)}: room for about {count(Math.round(1e6 / mathOnly / 1000) * 1000)} tokens a second, the opening's ceiling.
+	</p>
+</Predict>
+
+## The running total
+
+A layer does not replace the token's incoming list. Both attention and the experts read a copy of the list, compute an update, and fold that update back in (standard transformers add it; Muse Spark Open learns a weighted blend). The list therefore travels through all {LAYERS.total} layers like a <Term id="residual">running total</Term>, called the residual stream. A layer with little to contribute can leave the list nearly as it was, and what an early layer worked out stays available at the end.
+
+Before either stage runs, the layer <Term id="norm">rescales</Term> its copy of the list by dividing every number by the list's typical magnitude (its root-mean-square). Without that step, {LAYERS.total * 2} updates in a row could push values out of range or shrink them toward zero.
+
+A word's meaning depends on the tokens before it: "bank" means one thing after "river" and another after "savings." A reply's thousandth token has to account for the 999 tokens before it, yet each normal decode pass takes in only the newest token. What can a pass keep from earlier tokens so it does not have to recompute them all?

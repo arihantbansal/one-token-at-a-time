@@ -1,0 +1,94 @@
+---
+// More people per pass: more tokens in total, fewer for each person. From the judge's floors for a
+// whole pass's layers at each decode load; each column has its own fixed scale from zero.
+import { decodeThroughput } from "../lib/challenge";
+import { count } from "../lib/format";
+
+const PEOPLE = [1, 16, 32];
+const rows = PEOPLE.map((n) => ({ n, ...decodeThroughput(n) }));
+const most = (key: "total" | "each") => Math.max(...rows.map((r) => r[key]));
+const name = (n: number) => (n === 1 ? "1 person" : `${n} people`);
+const COLUMNS = [
+	{ key: "total", title: "tokens a second, everyone together" },
+	{ key: "each", title: "tokens a second, for each person" },
+] as const;
+---
+
+<div class="tradeoff">
+	{
+		COLUMNS.map((c) => (
+			<section class="column">
+				<h3>{c.title}</h3>
+				<dl>
+					{rows.map((r) => (
+						<div class="row">
+							<dt>{name(r.n)}</dt>
+							<dd>
+								<span class="track" aria-hidden="true">
+									<i style={`--w: ${r[c.key] / most(c.key)}`} />
+								</span>
+								<span class="x">{count(r[c.key])}</span>
+							</dd>
+						</div>
+					))}
+				</dl>
+			</section>
+		))
+	}
+	<p class="note">best possible rates through the model's layers, on eight H200s</p>
+</div>
+
+<style>
+	.tradeoff {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+		gap: 1.5rem 2.5rem;
+		max-width: 40rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	dl {
+		margin: 0;
+	}
+	.row {
+		display: grid;
+		grid-template-columns: 5.5rem 1fr;
+		align-items: center;
+		gap: 0.75rem;
+		min-height: 1.75rem;
+	}
+	dd {
+		display: grid;
+		grid-template-columns: 1fr 3.5rem;
+		align-items: center;
+		gap: 0.75rem;
+		margin: 0;
+	}
+	.track {
+		height: 0.875rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	i {
+		display: block;
+		height: 100%;
+		width: calc(var(--w) * 100%);
+		background: var(--ink);
+	}
+	.note {
+		grid-column: 1 / -1;
+		margin: 0;
+		font-size: 0.75rem;
+		text-align: right;
+	}
+	.x {
+		text-align: right;
+		color: var(--ink);
+		font-variant-numeric: tabular-nums;
+	}
+</style>

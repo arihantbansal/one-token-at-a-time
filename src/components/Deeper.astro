@@ -1,0 +1,14 @@
+---
+// Detail for readers who want more, folded by default: real code, hardware specifics, the exact
+// formula. The main text must stand without it.
+type Props = { title: string };
+const { title } = Astro.props;
+---
+
+<details class="fold">
+	<summary>
+		<span class="fold-glyph" aria-hidden="true">+</span>
+		<span>{title}</span>
+	</summary>
+	<div class="fold-body"><slot /></div>
+</details>

@@ -1,0 +1,238 @@
+---
+layout: ../layouts/Stop.astro
+slug: challenge
+description: "The Open Kernel Challenge decoded: its two tracks, what each of the five kernel problems asked and the chapters that explain it, how a run was checked and timed, one task brief read line by line, a cheat sheet for reading your agent's diff, and how the serving track is scored."
+---
+
+import BriefLines from "../components/BriefLines.astro";
+import Deeper from "../components/Deeper.astro";
+import Figure from "../components/Figure.astro";
+import JudgeRace from "../components/JudgeRace.astro";
+import LoadTable from "../components/LoadTable.astro";
+import ProblemTable from "../components/ProblemTable.astro";
+import LayerMap from "../components/LayerMap.astro";
+import Term from "../components/Term.astro";
+import data from "../data/challenge.json";
+import { contestYear, fetchedAt, formatDate, kernelTrack, loadFloors, officialUrl, problem, servingTrack } from "../lib/challenge";
+import { count } from "../lib/format";
+import { layerChain } from "../lib/kernels";
+import {
+	CONTEXT_TOKENS,
+	DRAFT_TOKENS,
+	GPUS,
+	H200,
+	HEAD_DIM,
+	LAYERS,
+	LOCAL_EXPERTS,
+	PREFILL_CHUNK,
+	SLIDING_WINDOW,
+} from "../lib/model";
+
+export const layer = problem("muse_decode_layer");
+export const maxProjTokens = Math.max(
+	...problem("muse_bf16_proj").shapes.map((s) => Number(/m (\d+)/.exec(s.shape)?.[1] ?? 0)),
+);
+export const layerLoads = loadFloors("muse_decode_layer");
+export const workRatio = Math.max(...layerLoads.map((l) => l.us)) / Math.min(...layerLoads.map((l) => l.us));
+export const servingLoads = data.servingLoads;
+export const people = (list) => `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`;
+
+The <a href="https://openkernelchallenge.dev/">Open Kernel Challenge</a> asked how much faster Meta's Muse Spark Open could run on NVIDIA H200 GPUs. Organized by Paradigm with Meta and Andromeda, it published the system data this guide uses: the model's layer shapes, <Term id="sglang">SGLang</Term>'s baseline kernels, ideal floors, and measured timings. What follows describes the problems and scoring without prescribing solutions.
+
+## Two tracks
+
+The kernel track ({kernelTrack}, {contestYear}) posed five standalone problems, each a slice of one layer as one GPU of an {GPUS}-GPU server runs it. An entry was a single Python file. The judge checked its outputs against a high-precision reference, then timed it against SGLang's kernel on the same H200 in the same run. Each score was a <Term id="speedup">speedup</Term> (SGLang's time divided by the entry's), so `2.00×` takes half the time.
+
+The serving track ({servingTrack}) moved to the whole system: an entry was a patch to SGLang itself, scored on an {GPUS}-GPU server answering live conversations. That board paid the prize pool, listed in the [official summary](https://openkernelchallenge.dev/llms.txt) as "$100,000 on the serving board: 1st $50,000 and a signed H200", with prizes down to tenth place. Kernel-board standings decided queue priority when shared benchmark servers were busy.
+
+## What each problem asked
+
+Each kernel problem timed one kind of work in a layer:
+
+- <a href={officialUrl("muse_bf16_proj")}><code>muse_bf16_proj</code></a>: the five dense projections of a layer (`qkv_gate`, `o`, `router`, `pooler`, `unpooler`), multiplying 16-bit weights (32-bit for the router) by incoming activations. At 1 token it is memory-bound GEMV; by {count(maxProjTokens)} tokens it shifts toward compute-bound tensor-core GEMM, so one submission must handle both regimes. Chapters [4](/chip), [5](/kernel), and [8](/batching).
+- <a href={officialUrl("muse_moe_w4a16")}><code>muse_moe_w4a16</code></a>: the experts stage on one GPU, unpacking 4-bit NVFP4 weights for whichever of the {LOCAL_EXPERTS} local experts were chosen and multiplying them with 16-bit activations. Every active expert is read in full however few tokens chose it, and active experts change every pass. Chapters [3](/experts) and [8](/batching).
+- <a href={officialUrl("muse_attention_decode")}><code>muse_attention_decode</code></a>: attention over the FP8 KV cache and its surrounding small steps, for sliding-window and full-attention layers. No weights are read; runtime is set by cache bytes and keeping all {H200.sms} compute blocks fed across variable-length conversations. Chapters [2](/attention) and [7](/attention-kernel).
+- <a href={officialUrl("muse_decode_layer")}><code>muse_decode_layer</code></a>: every step of one decode layer in order on one GPU, combining the three stages above with the ~{layerChain("sliding").length}-kernel chain of norms, gates, routing, and residual updates between them. The main new target is cutting overhead by fusing steps inside a CUDA graph. Chapter [6](/layer).
+- <a href={officialUrl("muse_prefill_layer")}><code>muse_prefill_layer</code></a>: a whole layer reading prompts (hundreds to {count(PREFILL_CHUNK)} tokens at once). Here the chip is compute-bound, experts run as variable-sized grouped GEMMs, and full-layer attention scales linearly with existing context for a fixed chunk and quadratically with prompt length when reading a prompt from scratch. Chapter [9](/prefill).
+
+The table below gives each problem's ideal <Term id="floor">floor</Term> (the longer of peak H200 bandwidth time or peak tensor-core math time), SGLang's baseline, and the fastest entry as of {formatDate(fetchedAt)}. Each time combines the problem's loads via the judge's geometric mean and covers that problem's share of one pass.
+
+<ProblemTable />
+
+Because prefill runs before reply streaming rather than per generated token, `muse_prefill_layer` had its own board; the four decode problems combined into the overall kernel ranking based on how much they sped up a decode pass.
+
+<div id="layer-map">
+	<p>
+		Here is every step of one Muse Spark Open layer in order; select any step to open the chapter that explains it.
+	</p>
+	<Figure surface="paper" label="one layer, step by step">
+		<LayerMap />
+	</Figure>
+</div>
+
+Each problem timed several <Term id="load">loads</Term> standing in for serving traffic. `muse_decode_layer`'s six loads are typical: 1, 16, and 32 concurrent users writing one token each, plus the same batch sizes verifying an {DRAFT_TOKENS}-token speculative pass, all around {count(CONTEXT_TOKENS)} tokens of context. Each load sums {LAYERS.sliding} sliding-window layers and {LAYERS.full} full-attention layers into one pass:
+
+<LoadTable problem="muse_decode_layer" />
+
+## Decoding your agent's diff
+
+If you pointed a coding agent at the challenge and opened its diff or benchmark log, this lookup table maps common keywords back to the chapters that explain them:
+
+<table>
+	<thead>
+		<tr>
+			<th>what you see in the diff</th>
+			<th>what it does</th>
+			<th>where to read</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><code>BLOCK_N</code>, <code>BLOCK_K</code>, <code>BLOCK_M</code></td>
+			<td>Tile dimensions owned by each Triton program; reshapes SM occupancy and memory reuse without changing the math</td>
+			<td><a href="/kernel">Ch 5</a></td>
+		</tr>
+		<tr>
+			<td><code>num_warps</code>, <code>num_stages</code></td>
+			<td>Warps per program and software-pipelining stages (prefetching the next HBM tile while multiplying the current one)</td>
+			<td><a href="/chip">Ch 4</a>, <a href="/kernel">Ch 5</a></td>
+		</tr>
+		<tr>
+			<td><code>@triton.autotune</code></td>
+			<td>Benchmarks a grid of tile sizes, warp counts, and pipeline stages per input shape and caches the fastest config</td>
+			<td><a href="/kernel">Ch 5</a></td>
+		</tr>
+		<tr>
+			<td><code>tl.dot(a, b)</code></td>
+			<td>Dispatches a 2D matrix tile to tensor cores (~{count(H200.flopsPerSecond / 1e12)} TFLOPS dense BF16, ~{count((2 * H200.flopsPerSecond) / 1e12)} TFLOPS dense FP8 on H200) instead of scalar FP32 CUDA cores (~{count(H200.fp32FlopsPerSecond / 1e12)} TFLOPS)</td>
+			<td><a href="/chip">Ch 4</a>, <a href="/batching">Ch 8</a></td>
+		</tr>
+		<tr>
+			<td><code>CUDAGraph</code> / no Python <code>if</code></td>
+			<td>Replays the layer's kernel chain in one CPU call; forbids runtime Python branching on tensor values</td>
+			<td><a href="/layer">Ch 6</a></td>
+		</tr>
+		<tr>
+			<td>fused RMSNorm + gate / residual</td>
+			<td>Merges adjacent small ops into one kernel so intermediates stay in registers instead of crossing global memory</td>
+			<td><a href="/layer">Ch 6</a></td>
+		</tr>
+		<tr>
+			<td><code>split_k</code>, <code>num_splits</code>, <code>lse</code></td>
+			<td>Splits a long KV cache or reduction across programs to fill {H200.sms} SMs, then recombines via log-sum-exp</td>
+			<td><a href="/attention-kernel">Ch 7</a></td>
+		</tr>
+		<tr>
+			<td><code>page_table</code> / <code>kv_indices</code></td>
+			<td>Indirection table telling attention where each token's non-contiguous FP8 KV cache page lives in HBM (PagedAttention)</td>
+			<td><a href="/attention-kernel">Ch 7</a></td>
+		</tr>
+		<tr>
+			<td><code>nvfp4</code> / <code>w4a16</code> / <code>e2m1</code></td>
+			<td>Unpacks 4-bit quantized expert weights and multiplies by per-16-weight 8-bit scales before matrix math</td>
+			<td><a href="/experts">Ch 3</a></td>
+		</tr>
+		<tr>
+			<td><code>grouped_gemm</code> / <code>moe_align</code></td>
+			<td>Sorts tokens by chosen expert and runs variable-sized batched matrix multiplications across active experts</td>
+			<td><a href="/batching">Ch 8</a>, <a href="/prefill">Ch 9</a></td>
+		</tr>
+		<tr>
+			<td><code>all_reduce</code> / <code>tp8</code> / <code>ep8</code></td>
+			<td>Cross-GPU synchronization adding partial sums across {GPUS} GPUs (tensor-parallel attention, expert-parallel MoE)</td>
+			<td><a href="/experts">Ch 3</a>, <a href="/layer">Ch 6</a></td>
+		</tr>
+	</tbody>
+</table>
+
+## How a run is judged
+
+### Correct first
+
+Every timed call received fresh inputs and compared outputs against a 32-bit reference (64-bit for projections). Tolerances allowed 16-bit and 8-bit rounding while catching skipped work or wrong math. In the whole-layer brief's own words:
+
+<ul>
+	{layer.correctness.map((c) => (
+		<li>{c}</li>
+	))}
+</ul>
+
+The whole-layer check also validates expert routing: two experts with nearly equal scores may swap, while clear winners among a GPU's local experts must be kept, and the GPU cannot receive meaningfully fewer tokens or distinct experts than the reference. Before timing, every submission had to pass correctness tests including harder non-scored shapes, and top entries were re-verified on nearby shapes in final review.
+
+### Timing that waits for the GPU
+
+Timing GPU code is easy to get wrong. Because the CPU queues GPU work asynchronously and moves on, a plain CPU stopwatch around a launch measures queuing rather than execution. Accurate timing records GPU-side CUDA events or synchronizes explicitly, after warm-up runs so JIT compilation and kernel loading do not count. (In this contest, compiling counted toward a run's wall-clock limit, not its score.)
+
+To match production serving, the judge recorded each shape as a <Term id="cudaGraph">CUDA graph</Term> and replayed entry and SGLang in turns on fresh inputs. Before every timed replay it read a buffer larger than the H200's {count(H200.l2Bytes / 2 ** 20)} MiB <Term id="l2">L2 cache</Term> so neither run started with warm data left behind by the one before.
+
+Because GPU timings vary from run to run, the judge timed pairs (swapping which side goes first) and reported the median speedup.
+
+<Figure label="the judge's race">
+	<JudgeRace />
+</Figure>
+
+A slow outlier skews its own pair's ratio, while the median ignores spikes that would pull an arithmetic mean off target. The median still wobbles slightly across runs, which is why every benchmark reports a range and small gains can be noise.
+
+<Deeper title="The brief's timing rules, in its own words">
+	<ul>
+		{layer.timing.map((t) => (
+			<li>{t}</li>
+		))}
+	</ul>
+</Deeper>
+
+### One number per problem
+
+A problem combines speedups across its loads with the <Term id="geomean">geometric mean</Term>: multiply the *n* speedups together and take the *n*-th root, so every load counts equally regardless of size. `muse_decode_layer`'s largest load moves about {count(workRatio)} times the work of its smallest, yet a 10% gain on either moves the score by the same amount.
+
+## One brief, line by line
+
+Each problem came with compact pseudocode specifying what the kernel computes. Here is <a href={officialUrl("muse_attention_decode")}><code>muse_attention_decode</code></a> read line by line in plain words:
+
+<BriefLines
+	problem="muse_attention_decode"
+	notes={[
+		{
+			reading: `Runs for every person in the pass and each new token: one during normal decode, or ${DRAFT_TOKENS} when verifying a speculative draft. p is the token's position in its conversation.`,
+			chapters: ["attention", "prefill"],
+		},
+		{
+			reading: "The layer's first projection already produced this token's query, key, value, and output gate packed together; this step splits them apart.",
+			chapters: ["attention", "kernel"],
+		},
+		{
+			reading: "Query and key are normalized to a standard scale (QK-norm) and the query is multiplied by a fixed factor so attention scores stay in a steady range.",
+			chapters: ["pass"],
+		},
+		{
+			reading: "On sliding-window layers, query and key are rotated by an angle set by position p (RoPE) so scores reflect relative distance.",
+			chapters: ["attention"],
+		},
+		{
+			reading: "The new key and value are quantized to FP8 (1 byte per number) and written into the conversation's KV cache slot.",
+			chapters: ["attention", "attention-kernel"],
+		},
+		{
+			reading: `Score the query against every visible key (the latest ${count(SLIDING_WINDOW)} tokens or the whole conversation), turn scores into softmax shares, and blend the values. Dividing by 8 is dividing by √${HEAD_DIM}.`,
+			chapters: ["attention", "attention-kernel"],
+		},
+		{
+			reading: "Normalize each head's blend and multiply by the sigmoid-squashed gate (0 to 1) that decides how much passes forward.",
+			chapters: ["layer"],
+		},
+	]}
+/>
+
+Nothing in those lines loads a weight table: the entire kernel is a problem of reading a long conversation's FP8 cache quickly.
+
+## The serving track's score
+
+The serving track scored the trade between server throughput and per-person speed. Each patched server answered live conversations with {people(servingLoads)} people at once. Each load yielded tokens/s per GPU (throughput) and tokens/s per person (interactivity), tracing each server's curve. At each load, the judge read the entry's throughput at the per-person speed unmodified SGLang achieved and divided by SGLang's throughput, comparing both servers at equal speed per user. The score was the geometric mean of those ratios, so unmodified SGLang scores `1.00`.
+
+The rules in the [official summary](https://openkernelchallenge.dev/llms.txt) tie a patch to the chapters above: it had to be lossless (no lower precision or skipped work), keep time to first token within 2× of SGLang (Chapter 9), stay within +2 GB of SGLang's per-GPU memory (Chapter 8), and remain clean enough for SGLang's maintainers to consider accepting.
+
+## About this guide
+
+This is an independent guide, not affiliated with Meta, Paradigm, or Andromeda. It uses only publicly released contest specifications and says nothing about private submissions.
+
+Contest figures come from the challenge's public API, read on {formatDate(fetchedAt)}. Calculated figures (bytes, operations, ideal floors) follow the judge's published `speed_of_light` cost model so the server chapters' pass bills sum to the judge's own floors. Interactive figures illustrate that model rather than live GPU timings.

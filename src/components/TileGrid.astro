@@ -1,0 +1,143 @@
+---
+// Kernel 1's tile arithmetic worked on the toy for program 1 in tiles of two rows: a column of row
+// numbers and a row of column numbers broadcast into a grid of addresses, the mask, the loaded
+// weights, the products with the token's numbers, and the sum along each row.
+import { worked } from "../lib/format";
+import { toyTileGrid } from "../lib/kernels";
+import { W } from "../lib/toy";
+
+const g = toyTileGrid(1, 2);
+const yes = (b: boolean) => (b ? "on" : "off");
+const STEPS = [
+	{
+		code: "rows[:, None] * K + cols[None, :]",
+		say: `each row number times ${g.K}, plus each column number: one address per place`,
+		cells: g.addresses.map((r) => r.map(String)),
+		kind: "plain",
+	},
+	{
+		code: "(rows[:, None] < N) & (cols[None, :] < K)",
+		say: `the mask: row ${g.rows[1]} is past the table's ${W.length} rows`,
+		cells: g.addresses.map((r, i) => r.map(() => yes(g.live[i]))),
+		kind: "mask",
+	},
+	{
+		code: "w = tl.load(..., mask=mask, other=0.0)",
+		say: "the weights at those addresses, 0 where the mask is off",
+		cells: g.w.map((r, i) => r.map((v) => (g.live[i] ? worked(v) : "0"))),
+		kind: "weight",
+	},
+	{
+		code: "w * x[None, :]",
+		say: "the token's numbers repeated down both rows, multiplied place by place",
+		cells: g.products.map((r, i) => r.map((v) => (g.live[i] ? worked(v) : "0"))),
+		kind: "plain",
+	},
+];
+---
+
+<div class="tile-grid">
+	<div class="inputs">
+		<div>
+			<code>rows[:, None]</code>
+			<span class="col">{g.rows.map((r) => <i>{r}</i>)}</span>
+			<span class="say">a column</span>
+		</div>
+		<div>
+			<code>cols[None, :]</code>
+			<span class="row">{g.cols.map((c) => <i>{c}</i>)}</span>
+			<span class="say">a row</span>
+		</div>
+	</div>
+	{
+		STEPS.map((s) => (
+			<section>
+				<code>{s.code}</code>
+				<span class="say">{s.say}</span>
+				<span class:list={["grid", s.kind]}>
+					{s.cells.map((row, i) => (
+						<span class:list={["line", { off: !g.live[i] }]}>
+							{row.map((c) => (
+								<i>{c}</i>
+							))}
+						</span>
+					))}
+				</span>
+			</section>
+		))
+	}
+	<section>
+		<code>tl.sum(w * x[None, :], axis=1)</code>
+		<span class="say">add along each row: one sum per row</span>
+		<span class="col sums">
+			{
+				g.sums.map((v, i) => (
+					<i class:list={{ off: !g.live[i] }}>{g.live[i] ? worked(v) : "0"}</i>
+				))
+			}
+		</span>
+		<span class="say">the store, masked by <code>rows &lt; N</code>, writes only row {g.rows[0]}'s</span>
+	</section>
+</div>
+
+<style>
+	.tile-grid {
+		display: grid;
+		gap: 1.25rem;
+		max-width: 34rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	code {
+		font: inherit;
+		color: var(--ink);
+		overflow-wrap: anywhere;
+	}
+	.inputs {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem 2.5rem;
+	}
+	.inputs > div,
+	section {
+		display: grid;
+		gap: 0.375rem;
+		justify-items: start;
+	}
+	.say {
+		font-size: 0.75rem;
+	}
+	i {
+		display: grid;
+		place-items: center;
+		min-width: 2.5rem;
+		height: 1.75rem;
+		padding: 0 0.25rem;
+		font-style: normal;
+		font-variant-numeric: tabular-nums;
+		border: 1px solid var(--rule);
+		color: var(--ink);
+	}
+	.row,
+	.line {
+		display: flex;
+		gap: 3px;
+	}
+	.col,
+	.grid {
+		display: grid;
+		gap: 3px;
+	}
+	.weight i {
+		background: var(--bytes-wash);
+		border-color: var(--bytes);
+		color: var(--bytes-ink);
+	}
+	.off i,
+	i.off {
+		border-style: dashed;
+		background: none;
+		color: var(--ink-2);
+	}
+</style>

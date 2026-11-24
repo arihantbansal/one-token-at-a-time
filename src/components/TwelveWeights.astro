@@ -1,0 +1,131 @@
+---
+// The twelve-weight projection worked by hand: the token's four numbers across the top, three rows
+// of four weights beneath them, and each row's weighted sum at its end. Each weight sits under the
+// number it multiplies.
+import { count, worked } from "../lib/format";
+import { output, W, X } from "../lib/toy";
+
+const weights = W.length * X.length;
+const signed = (n: number) => (n < 0 ? `(${worked(n)})` : worked(n));
+const term = (w: number, x: number) => `${signed(x)}×${signed(w)}`;
+const rows = W.map((row, r) => ({
+	row,
+	out: worked(output(r)),
+	sum: row.map((w, i) => term(w, X[i])).join(" + "),
+}));
+---
+
+<div class="twelve">
+	<div
+		class="grid"
+		role="img"
+		aria-label={`Four numbers in: ${X.map(worked).join(", ")}. Three rows of four weights; each row's weighted sum gives one number out: ${rows.map((r) => r.out).join(", ")}.`}
+	>
+		<span class="head in">the token's four numbers</span>
+		<span class="head out">out</span>
+		{X.map((x) => <span class="obj-work">{worked(x)}</span>)}
+		<span></span>
+		<span></span>
+		{
+			rows.map((r) => (
+				<>
+					{r.row.map((w) => (
+						<span class="obj-weight">{worked(w)}</span>
+					))}
+					<span class="arrow">→</span>
+					<span class="obj-work result">{r.out}</span>
+				</>
+			))
+		}
+	</div>
+	<ol class="sums">
+		{
+			rows.map((r) => (
+				<li>
+					<span class="dot obj-op" aria-hidden="true"></span>
+					<span>
+						{r.sum} = <b>{r.out}</b>
+					</span>
+				</li>
+			))
+		}
+	</ol>
+	<p class="tally">
+		<span class="bytes"><span aria-hidden="true">■ </span>{count(weights)} weights, each read once</span>
+		<span class="math"><span aria-hidden="true">● </span>{count(2 * weights)} operations</span>
+	</p>
+</div>
+
+<style>
+	.twelve {
+		max-width: 26rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 3rem)) 1.5rem minmax(0, 3.5rem);
+		justify-content: center;
+		gap: 6px;
+		align-items: center;
+	}
+	.grid > :is(.obj-work, .obj-weight) {
+		--obj: 2.25rem;
+		min-width: 0;
+		width: 100%;
+	}
+	.head {
+		font-size: 0.75rem;
+		padding-bottom: 0.125rem;
+	}
+	.head.in {
+		grid-column: 1 / 5;
+	}
+	.head.out {
+		grid-column: 6;
+		text-align: center;
+	}
+	.grid > .obj-work:not(.result) {
+		margin-bottom: 0.625rem;
+	}
+	.arrow {
+		text-align: center;
+		color: var(--ink);
+	}
+	.result {
+		border-width: 2px;
+	}
+	.sums {
+		display: grid;
+		gap: 0.25rem;
+		margin: 1.25rem 0 0;
+		padding: 0;
+		list-style: none;
+		font-size: 0.75rem;
+	}
+	.sums li {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		align-items: baseline;
+		gap: 0.5rem;
+	}
+	.dot {
+		flex: none;
+		width: 0.375rem;
+		height: 0.375rem;
+		transform: translateY(-0.1rem);
+	}
+	b {
+		font-weight: inherit;
+		color: var(--ink);
+	}
+	.tally {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem 1.25rem;
+		margin: 1rem 0 0;
+		padding-top: 0.75rem;
+		border-top: 1px solid var(--rule);
+	}
+</style>

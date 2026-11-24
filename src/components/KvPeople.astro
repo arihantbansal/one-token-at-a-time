@@ -1,0 +1,137 @@
+---
+// Small multiples: 1, 16 and 32 people in one pass, each with their own cache, on one fixed
+// scale. A full layer reads every entry of every cache, so the bytes add up person by person.
+import { bytes, count } from "../lib/format";
+import { CONTEXT_TOKENS, kvBytes } from "../lib/model";
+import { seeded } from "../lib/random";
+import { LENGTH_SPREAD } from "../lib/serving";
+
+const PANELS = [1, 16, 32];
+const MAX_PEOPLE = Math.max(...PANELS);
+// Example lengths spread the way the contest's batches are, up to LENGTH_SPREAD either side of the
+// running example. Each swing is paired with its opposite, so 16 or 32 people average exactly CONTEXT_TOKENS.
+const SPREAD = CONTEXT_TOKENS * LENGTH_SPREAD;
+const rand = seeded(2048);
+const swings = Array.from(
+	{ length: MAX_PEOPLE / 2 },
+	() => Math.round(((rand() * 2 - 1) * SPREAD) / 100) * 100,
+);
+const panelLengths = (people: number) =>
+	people === 1
+		? [CONTEXT_TOKENS]
+		: swings.slice(0, people / 2).flatMap((s) => [CONTEXT_TOKENS + s, CONTEXT_TOKENS - s]);
+const longest = Math.max(...panelLengths(MAX_PEOPLE));
+
+const panels = PANELS.map((people) => {
+	const ls = panelLengths(people);
+	return {
+		people,
+		lengths: ls,
+		full: ls.reduce((sum, t) => sum + kvBytes(t, "full"), 0),
+		sliding: ls.reduce((sum, t) => sum + kvBytes(t, "sliding"), 0),
+	};
+});
+const most = Math.max(...panels.map((p) => p.full));
+---
+
+<div class="people" style={`--slots: ${MAX_PEOPLE}`}>
+	{
+		panels.map((p) => (
+			<section class="panel">
+				<h3>{p.people === 1 ? "1 person" : `${p.people} people`}</h3>
+				<div
+					class="caches"
+					role="img"
+					aria-label={`${p.people === 1 ? "One cache" : `${p.people} separate caches`}, ${count(Math.min(...p.lengths))} to ${count(Math.max(...p.lengths))} tokens long, all read by a full layer.`}
+				>
+					{p.lengths.map((t) => (
+						<i style={`--w: ${t / longest}`} />
+					))}
+				</div>
+				<dl>
+					<div>
+						<dt>full layer reads</dt>
+						<dd>
+							<span class="track" aria-hidden="true">
+								<b style={`--w: ${p.full / most}`} />
+							</span>
+							{bytes(p.full)}
+						</dd>
+					</div>
+					<div>
+						<dt>sliding layer reads</dt>
+						<dd>
+							<span class="track" aria-hidden="true">
+								<b style={`--w: ${p.sliding / most}`} />
+							</span>
+							{bytes(p.sliding)}
+						</dd>
+					</div>
+				</dl>
+			</section>
+		))
+	}
+</div>
+
+<style>
+	.people {
+		display: grid;
+		gap: 1.5rem;
+		max-width: 44rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	@media (min-width: 40rem) {
+		.people {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	/* Room for the most people in every panel, so all three share one scale. */
+	.caches {
+		display: grid;
+		grid-template-rows: repeat(var(--slots), 3px);
+		row-gap: 2px;
+		align-content: start;
+		padding: 0.375rem;
+		border: 1px solid var(--rule);
+	}
+	.caches i {
+		display: block;
+		width: calc(var(--w) * 100%);
+		background: var(--bytes);
+	}
+	dl {
+		display: grid;
+		gap: 0.375rem;
+		margin: 0.75rem 0 0;
+	}
+	dt {
+		font-size: 0.75rem;
+	}
+	dd {
+		display: grid;
+		grid-template-columns: 1fr 4.75rem;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0.125rem 0 0;
+		color: var(--bytes-ink);
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	.track {
+		height: 0.5rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	.track b {
+		display: block;
+		height: 100%;
+		width: max(2px, calc(var(--w) * 100%));
+		background: var(--bytes);
+	}
+</style>

@@ -1,0 +1,106 @@
+---
+// One program reading its slice two tokens at a time, where the second tile has a larger score:
+// the state it keeps (largest score, total, weighted sum), the shrink applied to the old
+// state, and the new state. Numbers are rounded to hundredths, each from the rounded ones before.
+import { twoPlaces, worked } from "../lib/format";
+import { runningWorked } from "../lib/kernels";
+
+const tiles = runningWorked();
+const maxText = (m: number | null) => (m === null || !Number.isFinite(m) ? "none yet" : worked(m));
+---
+
+<div class="running">
+	{
+		tiles.map((t, i) => (
+			<section>
+				<h3>
+					tile {i + 1}: scores {t.tokens.map((x) => worked(x.s)).join(" and ")}
+				</h3>
+				<dl>
+					<div>
+						<dt>kept so far</dt>
+						<dd>
+							largest {maxText(t.before.max)}, total {twoPlaces(t.before.sum)}, weighted sum {twoPlaces(t.before.acc)}
+						</dd>
+					</div>
+					<div>
+						<dt>new largest</dt>
+						<dd>{worked(t.max)}</dd>
+					</div>
+					<div>
+						<dt>shrink the old</dt>
+						<dd>
+							{i === 0
+								? "nothing to shrink"
+								: `× e^(${worked(t.before.max)} − ${worked(t.max)}) = × ${twoPlaces(t.shrink)}: total ${twoPlaces(t.kept.sum)}, weighted sum ${twoPlaces(t.kept.acc)}`}
+						</dd>
+					</div>
+					<div>
+						<dt>add this tile</dt>
+						<dd>
+							e^(score − {worked(t.max)}): {t.tokens.map((x) => twoPlaces(x.p)).join(" + ")}; × value:{" "}
+							{t.tokens.map((x) => twoPlaces(x.pv)).join(" + ")}
+						</dd>
+					</div>
+					<div class="now">
+						<dt>kept now</dt>
+						<dd>
+							largest {worked(t.max)}, total {twoPlaces(t.sum)}, weighted sum {twoPlaces(t.acc)}
+						</dd>
+					</div>
+				</dl>
+			</section>
+		))
+	}
+	<p class="end">
+		at the end, the blend: weighted sum ÷ total = {twoPlaces(tiles[1].acc)} ÷ {twoPlaces(tiles[1].sum)} = <b>{twoPlaces(tiles[1].blend)}</b>
+	</p>
+</div>
+
+<style>
+	.running {
+		display: grid;
+		gap: 1.5rem;
+		max-width: 36rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	dl {
+		display: grid;
+		gap: 0.375rem;
+		margin: 0;
+	}
+	dl div {
+		display: grid;
+		grid-template-columns: 8.5rem minmax(0, 1fr);
+		gap: 0.75rem;
+	}
+	dd {
+		margin: 0;
+		color: var(--ink);
+		font-variant-numeric: tabular-nums;
+	}
+	.now {
+		padding-top: 0.375rem;
+		border-top: 1px solid var(--ink-2);
+	}
+	@media (max-width: 26rem) {
+		dl div {
+			grid-template-columns: 1fr;
+			gap: 0.125rem;
+		}
+	}
+	p {
+		margin: 0;
+	}
+	b {
+		font-weight: inherit;
+		color: var(--ink);
+	}
+</style>

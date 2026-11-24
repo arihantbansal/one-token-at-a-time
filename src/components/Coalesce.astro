@@ -1,0 +1,117 @@
+---
+// One warp's 32 threads each reading one 16-bit weight: from neighboring addresses the reads
+// combine into two 32-byte pieces; from 32 different rows each read costs a piece of its own.
+import { count } from "../lib/format";
+import { H200, MEMORY_SECTOR_BYTES as SECTOR } from "../lib/model";
+
+const WORD = 2;
+const used = H200.warpSize * WORD;
+const CASES = [
+	{
+		title: "neighboring addresses: one row, side by side",
+		sectors: used / SECTOR,
+		perSector: SECTOR / WORD,
+	},
+	{
+		title: `scattered addresses: one weight from each of ${H200.warpSize} rows`,
+		sectors: H200.warpSize,
+		perSector: 1,
+	},
+];
+const slots = SECTOR / WORD;
+---
+
+<div class="coalesce">
+	<p class="head">{count(H200.warpSize)} threads, each reading one 2-byte weight: {count(used)} bytes wanted</p>
+	{
+		CASES.map((c) => (
+			<section>
+				<h3>{c.title}</h3>
+				<div
+					class="sectors"
+					role="img"
+					aria-label={`${count(c.sectors)} pieces of ${SECTOR} bytes fetched, ${count(c.sectors * SECTOR)} bytes, to deliver ${count(used)}`}
+				>
+					{Array.from({ length: c.sectors }, () => (
+						<span class="sector">
+							<i class="want" style={`width: ${(c.perSector / slots) * 100}%`} />
+						</span>
+					))}
+				</div>
+				<p class="said">
+					{count(c.sectors)} {c.sectors === 1 ? "piece" : "pieces"} of {SECTOR} bytes moved:{" "}
+					<b>{count(c.sectors * SECTOR)} bytes</b> for {count(used)} wanted
+				</p>
+			</section>
+		))
+	}
+	<p class="key" aria-hidden="true">
+		<span><i class="want"></i> bytes a thread wanted</span>
+		<span><i></i> bytes moved anyway</span>
+	</p>
+</div>
+
+<style>
+	.coalesce {
+		display: grid;
+		gap: 1.25rem;
+		max-width: 36rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.head,
+	h3 {
+		color: var(--ink);
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+	}
+	.sectors {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr));
+		gap: 4px;
+	}
+	.sector {
+		display: block;
+		height: 0.875rem;
+		border: 1px solid var(--bytes);
+		background: var(--bytes-wash);
+	}
+	.sector i {
+		display: block;
+		height: 100%;
+	}
+	i.want,
+	.key i.want {
+		background: var(--bytes);
+	}
+	.key i {
+		display: inline-block;
+		width: 0.875rem;
+		height: 0.875rem;
+		border: 1px solid var(--bytes);
+		background: var(--bytes-wash);
+	}
+	.said {
+		margin-top: 0.5rem;
+	}
+	b {
+		font-weight: inherit;
+		color: var(--ink);
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1.5rem;
+	}
+	.key span {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+</style>

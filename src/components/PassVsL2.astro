@@ -1,0 +1,59 @@
+---
+import { passBytesPerGpu } from "../lib/challenge";
+// The bytes one pass moves through the busiest GPU for one person, counted in L2-sized squares.
+import { bytes, count } from "../lib/format";
+import { H200 } from "../lib/model";
+
+const passBytes = passBytesPerGpu();
+const fills = Math.round(passBytes / H200.l2Bytes);
+const l2 = `${count(H200.l2Bytes / 2 ** 20)} MiB, or ${bytes(H200.l2Bytes)}`;
+---
+
+<div class="pass-vs-l2">
+	<p class="key">
+		<span class="one" aria-hidden="true"></span> one square: the whole L2, {l2}
+	</p>
+	<div class="grid" role="img" aria-label={`One pass moves ${count(fills)} times as much data as the L2 holds`}>
+		{Array.from({ length: fills }, (_, i) => <i class:list={{ first: i === 0 }} />)}
+	</div>
+	<p class="said">one pass for one person, on the busiest GPU: {bytes(passBytes)}, about {count(fills)} squares</p>
+</div>
+
+<style>
+	.pass-vs-l2 {
+		display: grid;
+		gap: 0.75rem;
+		max-width: 34rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.key {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(0.8rem, 1fr));
+		gap: 3px;
+	}
+	.grid i,
+	.one {
+		aspect-ratio: 1;
+		background: var(--bytes);
+	}
+	.one {
+		width: 0.8rem;
+	}
+	.grid i.first {
+		outline: 1.5px solid var(--ink);
+		outline-offset: 1px;
+	}
+	.said {
+		color: var(--ink);
+	}
+</style>

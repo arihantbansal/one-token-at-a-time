@@ -1,0 +1,217 @@
+---
+// How a reply is made: one pass reads the whole prompt and writes the first token, then every
+// later token takes one more pass. Shows the finished reply until it plays.
+import { count } from "../lib/format";
+import { PROMPT as prompt, REPLY as reply } from "../lib/tokenLoop";
+import Readout from "./Readout.astro";
+
+const n = reply.length;
+const show = (token: string) => token.trim();
+
+// Every status the figure can show, so the slot is sized to the longest before it plays.
+const status = {
+	prefill: (total: number) =>
+		`pass 1 of ${total}: reading all ${prompt.length} prompt tokens, writing the first reply token`,
+	decode: (k: number, total: number) => `pass ${k} of ${total}: the newest token goes in, the next comes out`,
+	done: (total: number) => `${total} passes for ${total} tokens; only the first read the prompt`,
+};
+const sizers = [status.prefill(n), status.decode(n, n), status.done(n)];
+---
+
+<okc-token-loop class="figure-mono">
+	<div class="row">
+		<span class="row-label">prompt</span>
+		<div>
+			<p class="text">{prompt.join("")}</p>
+			<div class="chips" data-chips="prompt" aria-hidden="true">
+				{prompt.map((t) => <span class="chip">{show(t)}</span>)}
+			</div>
+		</div>
+	</div>
+	<div class="row">
+		<span class="row-label">reply</span>
+		<div>
+			<div class="chips" data-chips="reply" aria-hidden="true">
+				{reply.map((t) => <span class="chip" data-token={t}>{show(t)}</span>)}
+			</div>
+			<p class="stream" data-stream>{reply.join("")}</p>
+		</div>
+	</div>
+	<div class="pass">
+		<p class="status">
+			{sizers.map((s) => <span class="sizer" aria-hidden="true">{s}</span>)}
+			<span data-status>{status.done(n)}</span>
+		</p>
+		<div class="bar" aria-hidden="true"><span data-bar></span></div>
+	</div>
+	<Readout
+		items={[
+			{ key: "tokens", label: "reply tokens written", value: count(n) },
+			{ key: "passes", label: "passes run", value: count(n) },
+		]}
+	/>
+	<div class="controls"><button class="btn" type="button" data-play>Replay</button></div>
+</okc-token-loop>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+	import { count } from "../lib/format";
+
+	const PREFILL_MS = 1400;
+	const TOKEN_MS = 520;
+	const FILL = 0.8;
+
+	class TokenLoop extends FigureElement {
+		private prompt!: HTMLElement[];
+		private reply!: HTMLElement[];
+		private sizers!: string[];
+		private p = 1;
+		private playing = false;
+
+		setup() {
+			this.prompt = [...this.querySelectorAll<HTMLElement>('[data-chips="prompt"] .chip')];
+			this.reply = [...this.querySelectorAll<HTMLElement>('[data-chips="reply"] .chip')];
+			this.sizers = [...this.querySelectorAll<HTMLElement>(".sizer")].map((s) => s.textContent ?? "");
+			this.render(1);
+			// Plays once when scrolled into view; the button pauses, resumes or replays it.
+			this.on(this.$("[data-play]"), "click", () => (this.playing ? this.pause() : this.play()));
+			this.whenVisible(() => this.play());
+		}
+
+		play() {
+			const from = this.p >= 1 ? 0 : this.p;
+			const total = PREFILL_MS + (this.reply.length - 1) * TOKEN_MS;
+			this.playing = true;
+			this.tween(total * (1 - from), (q) => {
+				if (q >= 1) this.playing = false;
+				this.render(from + (1 - from) * q);
+			});
+		}
+
+		pause() {
+			this.stop();
+			this.playing = false;
+			this.render(this.p);
+		}
+
+		/** `p` is the fraction of the whole playback. Pass 1 reads the prompt and writes token 1;
+		 *  pass k after it writes token k. */
+		render(p: number) {
+			this.p = p;
+			const n = this.reply.length;
+			const t = p * (PREFILL_MS + (n - 1) * TOKEN_MS);
+			const finished = p >= 1 ? n : t < PREFILL_MS ? 0 : 1 + Math.floor((t - PREFILL_MS) / TOKEN_MS);
+			const underway = Math.min(finished + 1, n);
+			const into = finished === 0 ? t / PREFILL_MS : ((t - PREFILL_MS) % TOKEN_MS) / TOKEN_MS;
+			const done = finished === n;
+
+			for (const chip of this.prompt) chip.classList.toggle("lit", finished === 0);
+			this.reply.forEach((chip, i) => {
+				chip.classList.toggle("off", i >= finished);
+				chip.classList.toggle("new", !done && i === finished - 1);
+			});
+			this.$("[data-stream]").textContent = this.reply
+				.slice(0, finished)
+				.map((chip) => chip.dataset.token ?? "")
+				.join("");
+
+			this.$("[data-bar]").style.transform = `scaleX(${done ? 1 : Math.min(1, into / FILL)})`;
+			this.out("tokens", count(finished));
+			this.out("passes", count(finished));
+
+			const [prefill, decode, final] = this.sizers;
+			let status = final;
+			if (finished === 0) status = prefill;
+			else if (!done) status = decode.replace(/^pass \d+/, `pass ${underway}`);
+			this.$("[data-status]").textContent = status;
+			this.$("[data-play]").textContent = done ? "Replay" : this.playing ? "Pause" : "Resume";
+		}
+	}
+
+	define("okc-token-loop", TokenLoop);
+</script>
+
+<style>
+	.row {
+		display: grid;
+		grid-template-columns: 3.5rem 1fr;
+		gap: 0.75rem;
+		align-items: start;
+		margin-bottom: 1rem;
+	}
+	.row-label {
+		color: var(--ink-2);
+		padding-top: 0.3rem;
+	}
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		min-height: 2rem;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.25rem 0.5rem;
+		border: 1px solid var(--rule);
+		background: var(--paper);
+		white-space: pre;
+		transition:
+			opacity var(--fast) var(--ease),
+			border-color var(--fast) var(--ease),
+			background-color var(--fast) var(--ease);
+	}
+	.chip.off {
+		opacity: 0;
+	}
+	.chip.lit,
+	.chip.new {
+		border-color: var(--ink);
+		background: var(--faint);
+	}
+	.pass {
+		margin: 1.5rem 0 0 4.25rem;
+		max-width: 24rem;
+	}
+	.status {
+		display: grid;
+		margin: 0 0 0.5rem;
+		color: var(--ink);
+	}
+	.status > span {
+		grid-area: 1 / 1;
+	}
+	.sizer {
+		visibility: hidden;
+	}
+	.bar {
+		height: 4px;
+		background: var(--faint);
+	}
+	.bar span {
+		display: block;
+		height: 100%;
+		background: var(--ink);
+		transform-origin: left;
+		transform: scaleX(0);
+	}
+	.text {
+		margin: 0 0 0.5rem;
+		color: var(--ink);
+	}
+	.stream {
+		margin: 0.75rem 0 0;
+		min-height: 2.9em;
+		white-space: pre-wrap;
+		color: var(--ink);
+	}
+	@media (max-width: 30rem) {
+		.row {
+			grid-template-columns: 1fr;
+			gap: 0.25rem;
+		}
+		.pass {
+			margin-left: 0;
+		}
+	}
+</style>

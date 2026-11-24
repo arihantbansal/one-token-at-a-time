@@ -1,0 +1,141 @@
+---
+layout: ../layouts/Stop.astro
+slug: tradeoff
+description: Where 94,000 tokens a second went. What one person gets, what batching buys back for the server and costs each person, how far real kernels sit from the ideal, and how to work out your own machine's best possible speed.
+---
+
+import Figure from "../components/Figure.astro";
+import Predict from "../components/Predict.astro";
+import SpeedCalculator from "../components/SpeedCalculator.astro";
+import Term from "../components/Term.astro";
+import Throughput from "../components/Throughput.astro";
+import { contestTimes, decodeThroughput, loadFloors } from "../lib/challenge";
+import { bytes, count, microseconds, percent, times, worked } from "../lib/format";
+import {
+	ACTIVE_WEIGHTS,
+	ARITHMETIC_TOKENS_PER_SECOND,
+	attentionFlops,
+	BALANCE_POINT,
+	CONTEXT_TOKENS,
+	FP32_BALANCE_POINT,
+	GPUS,
+	KV_SIZE,
+	LAYERS,
+	LONG_CONTEXT_ARITHMETIC_TOKENS_PER_SECOND,
+	NVFP4_BYTES,
+	SLICED_MAX_TOKENS,
+	TOTAL_WEIGHTS,
+} from "../lib/model";
+import { layerChain } from "../lib/kernels";
+import { EXAMPLES, fullLayerCacheBytes, tokensPerSecond } from "../lib/serving";
+
+export const arithmetic = ARITHMETIC_TOKENS_PER_SECOND;
+export const longArithmetic = LONG_CONTEXT_ARITHMETIC_TOKENS_PER_SECOND;
+export const attnOpsBillions = count(Math.round(attentionFlops(CONTEXT_TOKENS) / 1e9));
+export const kvEntryBytes = KV_SIZE * 2;
+export const about = (n, step) => count(Math.round(n / step) * step);
+export const solo = decodeThroughput(1);
+export const mid = decodeThroughput(16);
+export const many = decodeThroughput(32);
+export const kernelsPerLayer = layerChain("sliding").length;
+export const layer = contestTimes("muse_decode_layer");
+export const laptop = EXAMPLES.find((e) => e.id === "m4max");
+
+With 32 people in every pass, this server produces about {about(many.total, 100)} tokens a second: {count(many.total / solo.total)} times what it writes for one person, and still under {Math.ceil((many.total / arithmetic) * 100)}% of what its weight arithmetic alone allows. Here is the ledger from Chapter 0 to now:
+
+<table>
+	<thead>
+		<tr>
+			<th>regime</th>
+			<th>tokens a second</th>
+			<th>what sets it</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td>weight arithmetic alone (short context)</td>
+			<td>{about(arithmetic, 1000)}</td>
+			<td>two operations per active weight on peak tensor cores, zero memory wait</td>
+		</tr>
+		<tr>
+			<td>arithmetic at {count(CONTEXT_TOKENS)} tokens</td>
+			<td>{about(longArithmetic, 1000)}</td>
+			<td>adds about {attnOpsBillions} billion attention operations per token across the long cache</td>
+		</tr>
+		<tr>
+			<td>one person ({count(CONTEXT_TOKENS)} tokens)</td>
+			<td>{count(solo.each)}</td>
+			<td>every active weight and cache entry streams from HBM for every token</td>
+		</tr>
+		<tr>
+			<td>32 people, server total</td>
+			<td>{count(many.total)}</td>
+			<td>shared weights read once for all 32, while each user adds a cache and more experts</td>
+		</tr>
+		<tr>
+			<td>each of the 32 people</td>
+			<td>{count(many.each)}</td>
+			<td>a pass moving 32 caches and more experts takes longer than a pass for one</td>
+		</tr>
+	</tbody>
+</table>
+
+The last three rows are ideal layer floors from the challenge's cost model at ~{count(CONTEXT_TOKENS)}-token contexts. Because they omit steps outside the {LAYERS.total} layers, per-kernel startup overhead, and cross-GPU collectives ({2 * LAYERS.total} all-reduces per pass, plus {LAYERS.total} small all-gathers at tiny batches of {SLICED_MAX_TOKENS} tokens or fewer), measured servers run slower, yet total throughput and per-person speed trade off along the same curve.
+
+## What batching buys back
+
+A server has two speeds that pull apart: total <Term id="throughput">throughput</Term> across everyone it serves, and the per-user streaming speed each person sees.
+
+<Figure surface="paper" label="total against each">
+	<Throughput />
+</Figure>
+
+The first step does most of the work in both directions. Going from 1 person to 16 multiplies total output by {count(mid.total / solo.total)}× while trimming each person to {percent(mid.each / solo.each)} of solo speed. Going on to 32 multiplies total throughput by another {times(many.total / mid.total, 1)} and costs each user {percent(1 - many.each / mid.each)} of their speed. By 16 people, shared projection weights are already well-amortized; each newcomer mainly adds a private cache and a few newly chosen experts.
+
+Why does decode batching stop so far short of {about(arithmetic, 1000)} (or {about(longArithmetic, 1000)})? Reaching the tensor-core <Term id="roofline">roofline</Term> ridge requires about {count(BALANCE_POINT)} tokens sharing every 16-bit weight, or about {count(BALANCE_POINT * NVFP4_BYTES / 2)} sharing each NVFP4 expert weight (because {worked(NVFP4_BYTES * 8)}-bit weights are nearly four times smaller than 16-bit weights and arrive nearly four times faster). Only shared projections amortize one read across a whole batch. Caches belong to individual conversations, and experts serve only the tokens that chose them, so growing the batch raises the share of bytes that cannot be shared.
+
+## Selling speed
+
+Suppose an {GPUS}× H200 server costs the same per hour regardless of batch size. At 1 user it writes about {count(solo.total)} tokens a second; at 32 users it writes about {count(many.total)}. A token written for one person alone therefore takes about {count(many.total / solo.total)} times as much of the server's hour as a token written in a 32-user batch.
+
+A service running smaller batches gives each user faster tokens while spreading its GPU bill over fewer of them. Raising the batch size makes tokens cheaper and slower per user. The same hardware can sell cheap background throughput or fast interactive replies, and batch size chooses between them.
+
+## Ideal and measured
+
+How close does real serving software get to these floors? Across the {count(loadFloors("muse_decode_layer").length)} loads of `muse_decode_layer`, combined with the judge's geometric mean, the ideal pass floor is {microseconds(layer.ideal)}. <Term id="sglang">SGLang</Term>'s baseline kernels took {microseconds(layer.sglang)}, about {times(layer.sglang / layer.ideal, 1)} the ideal{layer.best !== undefined && <>, while the fastest entry took {microseconds(layer.best)}, {times(layer.speedup, 1)} faster than SGLang and still {times(layer.best / layer.ideal, 1)} the ideal floor</>}.
+
+That gap is everything the ideal cost model leaves out:
+- Imperfect bandwidth and cache reuse: real kernels rarely hit 100% of rated HBM bandwidth and sometimes read data more than once.
+- Per-kernel launch and drain overhead: starting and finishing {kernelsPerLayer} kernels per layer ({count(kernelsPerLayer * LAYERS.total)} per pass) adds fixed tax whenever small ops are not fused.
+- Imperfect overlap: overlapping HBM transfers and arithmetic across uneven context lengths and skewed MoE groups is difficult.
+- Cross-GPU communication: outside single-GPU kernel benchmarks, an {GPUS}-GPU server also pays for {2 * LAYERS.total} NVLink <Term id="allReduce">all-reduces</Term> per pass (plus {LAYERS.total} small all-gathers at tiny batches of {SLICED_MAX_TOKENS} tokens or fewer).
+
+That room between stock serving software and the silicon floor is where kernel engineers and coding agents work. Every microsecond saved becomes either faster replies per person or more users on the same hardware.
+
+## Pocket equations
+
+Whenever a model's active weights stream from main memory on every token, three back-of-the-envelope formulas estimate decode ceilings and bottlenecks for any model and GPU (for deeper derivations, see Google's [JAX Scaling Book: Inference](https://jax-ml.github.io/scaling-book/inference/) and Horace He's [Making Deep Learning Go Brrrr](https://horace.io/brrr_intro.html)):
+
+- Single-user decode ceiling: `tokens/s ≈ memory bandwidth ÷ (active weight bytes + KV cache bytes read per token)`
+- Hardware ridge (critical batch size, weights only): `batch ≈ (GPU FLOP/s ÷ HBM bytes/s) × (bytes per weight ÷ 2)`, about {count(BALANCE_POINT)} tokens for BF16 weights on H200 tensor cores, {count(BALANCE_POINT * NVFP4_BYTES / 2)} for NVFP4, and {count(FP32_BALANCE_POINT)} for BF16 weights on FP32 CUDA cores.
+- KV cache entry per cached token (one layer, one GPU): `2 × KV heads × head dim × bytes per number` ({kvEntryBytes} bytes here in FP8; multiply by the number of attended tokens in the conversation to get bytes read per generated token).
+
+## Your own machine
+
+That first equation works on any computer whose active weights stream from main memory, from an H200 node to the laptop on your desk. Writing one token at a time for yourself, every active weight reads once per token, so memory bandwidth divided by bytes read gives the physical ceiling.
+
+<Predict question={`A laptop with ${count(laptop.gbPerSecond)} GB/s of memory bandwidth runs an 8-billion-parameter 4-bit model reading ${laptop.gb} GB of weights per token (scales included). What is its best possible generation speed for one person?`}>
+	<p>{count(laptop.gbPerSecond)} ÷ {laptop.gb} ≈ {count(tokensPerSecond(laptop.gbPerSecond, laptop.gb))} tokens a second, before adding the KV cache reads that grow with conversation length.</p>
+</Predict>
+
+Pick a preset or enter your own machine's published memory bandwidth and model footprint. (The 4-bit presets use NVFP4 with scales; the Muse Spark Open preset uses the busiest GPU's per-pass traffic across its {GPUS} H200s.)
+
+<Figure label="your machine's best speed">
+	<SpeedCalculator />
+</Figure>
+
+For a dense model, the second box is all parameters times bytes per weight. For a mixture of experts, count only active weights touched per token (for Muse Spark Open, about {count(ACTIVE_WEIGHTS / 1e9)} billion of {count(TOTAL_WEIGHTS / 1e9)} billion). Then add the KV cache read on each pass: at {count(CONTEXT_TOKENS)} tokens, Muse Spark Open's full-attention layers alone add {bytes(GPUS * fullLayerCacheBytes(CONTEXT_TOKENS))} of cache reads per token across all {GPUS} GPUs.
+
+The first preset returns to Chapter 0's {count(solo.each)} tokens a second; every other preset is a ceiling of the same kind, lowered by long contexts and approached only as closely as real kernels allow.
+
+With the complete path from weights to chips to servers in place, how did the Open Kernel Challenge carve Muse Spark Open into five benchmark problems and judge real speedups on H200s?

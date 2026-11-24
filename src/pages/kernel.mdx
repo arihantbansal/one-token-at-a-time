@@ -1,0 +1,278 @@
+---
+layout: ../layouts/Stop.astro
+slug: kernel
+description: What a GPU kernel is, read line by line in Triton. The twelve-weight projection split among programs, then the real projection as tiles of rows, what sets its time, and an interactive edit that changes its speed without changing its answer.
+---
+
+import Coalesce from "../components/Coalesce.astro";
+import Deeper from "../components/Deeper.astro";
+import Figure from "../components/Figure.astro";
+import InTheChallenge from "../components/InTheChallenge.astro";
+import KernelCode from "../components/KernelCode.astro";
+import Key from "../components/Key.astro";
+import ProjectionSizes from "../components/ProjectionSizes.astro";
+import Term from "../components/Term.astro";
+import TileEdit from "../components/TileEdit.astro";
+import TiledProjection from "../components/TiledProjection.astro";
+import TileGrid from "../components/TileGrid.astro";
+import { contestTimes, passBytesPerGpu, problem } from "../lib/challenge";
+import { bytes, count, us, worked } from "../lib/format";
+import {
+	layerChain,
+	PROJ_BLOCK_K,
+	PROJ_BLOCK_N,
+	projectionGrid,
+	toyProgram,
+	toyTrips,
+	TRITON_WARPS,
+} from "../lib/kernels";
+import {
+	BALANCE_POINT,
+	FP32_BALANCE_POINT,
+	floorUs,
+	getProjection,
+	H200,
+	HEAD_DIM,
+	HIDDEN,
+	KV_HEADS,
+	LAYERS,
+	MEMORY_SECTOR_BYTES,
+	PROJECTIONS,
+	projectionCost,
+	Q_HEADS,
+} from "../lib/model";
+import { W, X } from "../lib/toy";
+
+export const NAMES = {
+	qkv_gate: "into attention",
+	o: "out of attention",
+	router: "choosing experts",
+	pooler: "into the experts",
+	unpooler: "out of the experts",
+};
+export const p2 = toyProgram(2);
+export const list = (xs) => xs.map(worked).join(", ");
+export const pooler = getProjection("pooler");
+export const router = getProjection("router");
+export const qkvGate = getProjection("qkv_gate");
+export const attnOut = getProjection("o");
+export const grid = projectionGrid("pooler");
+export const routerGrid = projectionGrid("router");
+export const example = 5;
+export const exampleRows = `${example * PROJ_BLOCK_N} to ${(example + 1) * PROJ_BLOCK_N - 1}`;
+export const layerUs = PROJECTIONS.reduce((a, p) => a + floorUs(projectionCost(p, 1)), 0);
+export const times = contestTimes("muse_bf16_proj");
+export const maxTokens = Math.max(...problem("muse_bf16_proj").shapes.map((s) => Number(/m (\d+)/.exec(s.shape)?.[1] ?? 0)));
+export const halfTiles = projectionGrid("pooler", PROJ_BLOCK_N / 2).programs;
+export const scattered = (H200.warpSize * MEMORY_SECTOR_BYTES) / (H200.warpSize * 2);
+export const chainLength = layerChain("sliding").length;
+export const balance = Math.round(BALANCE_POINT);
+export const fp32Balance = Math.round(FP32_BALANCE_POINT);
+
+export const pseudo = [
+	{ code: "row = which program am I" },
+	{ code: "w = load row `row` of the weights" },
+	{ code: "x = load the token's numbers" },
+	{ code: "y = add up w[i] * x[i] for every i" },
+	{ code: "store y as output `row`" },
+];
+
+export const launch = [
+	{
+		code: "project[(3,)](w, x, y, 4, BLOCK_K=4)",
+		note: "Run `project` as three programs, handing each the same arguments: the weights, the token's numbers, a place for the three outputs, the row length 4, and the tile width 4.",
+	},
+];
+
+export const toy = [
+	{ code: "@triton.jit", note: "Compile the Python function below into a GPU kernel." },
+	{
+		code: "def project(w_ptr, x_ptr, y_ptr, K, BLOCK_K: tl.constexpr):",
+		note: "Each tensor arrives as the address of its first number in GPU memory. `K` is the row length, 4. `BLOCK_K` is fixed when the kernel is compiled, so the tile's size is known: 4.",
+	},
+	{ code: "    row = tl.program_id(0)", note: `Which program this is: ${p2.row} for program ${p2.row}.` },
+	{
+		code: "    cols = tl.arange(0, BLOCK_K)",
+		note: "The column numbers 0, 1, 2, 3, as one tile. Its length must be a power of two.",
+	},
+	{
+		code: "    w = tl.load(w_ptr + row * K + cols)",
+		note: `Row ${p2.row} starts ${p2.row * X.length} numbers in, so this fetches four weights at once: ${list(p2.w)}.`,
+		kind: "bytes",
+	},
+	{ code: "    x = tl.load(x_ptr + cols)", note: `The token's four numbers: ${list(X)}.`, kind: "bytes" },
+	{
+		code: "    y = tl.sum(w * x, axis=0)",
+		note: `Four multiplications, ${list(p2.products)}, then the sum: ${worked(p2.y)}.`,
+		kind: "math",
+	},
+	{ code: "    tl.store(y_ptr + row, y)", note: `Write ${worked(p2.y)} as output ${p2.row}.`, kind: "bytes" },
+];
+
+export const tiled = [
+	{ code: "@triton.jit" },
+	{
+		code: "def project(w_ptr, x_ptr, y_ptr, N, K, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):",
+		note: `New: \`N\`, the number of rows (${count(pooler.rows)}), and a tile ${PROJ_BLOCK_N} rows tall and ${PROJ_BLOCK_K} columns wide.`,
+	},
+	{ code: "    pid = tl.program_id(0)", note: `Program ${example} of ${grid.programs}.` },
+	{
+		code: "    rows = pid * BLOCK_N + tl.arange(0, BLOCK_N)",
+		note: `The ${PROJ_BLOCK_N} rows it owns: ${exampleRows}.`,
+	},
+	{
+		code: "    acc = tl.zeros((BLOCK_N,), dtype=tl.float32)",
+		note: `${PROJ_BLOCK_N} running sums, one per row, kept in registers as 32-bit floats so summing thousands of products doesn't drift.`,
+	},
+	{
+		code: "    for k in range(0, K, BLOCK_K):",
+		note: `Walk along the rows ${PROJ_BLOCK_K} columns at a time: ${grid.steps} steps to cover ${count(pooler.cols)}.`,
+	},
+	{ code: "        cols = k + tl.arange(0, BLOCK_K)", note: "This step's columns." },
+	{
+		code: "        mask = (rows[:, None] < N) & (cols[None, :] < K)",
+		note: "True for every place inside the table. A tile that hangs past an edge switches those places off.",
+	},
+	{
+		code: "        w = tl.load(w_ptr + rows[:, None] * K + cols[None, :], mask=mask, other=0.0)",
+		note: `A ${PROJ_BLOCK_N} × ${PROJ_BLOCK_K} tile of weights, ${bytes(grid.bytesPerStep)}. Places the mask switches off read nothing and count as 0.`,
+		kind: "bytes",
+	},
+	{
+		code: "        x = tl.load(x_ptr + cols, mask=cols < K, other=0.0)",
+		note: `The ${PROJ_BLOCK_K} token numbers those columns meet.`,
+		kind: "bytes",
+	},
+	{
+		code: "        acc += tl.sum(w.to(tl.float32) * x.to(tl.float32)[None, :], axis=1)",
+		note: "Widen both to 32 bits, multiply every weight by its column's number, and add each row's products to its running sum.",
+		kind: "math",
+	},
+	{
+		code: "    tl.store(y_ptr + rows, acc, mask=rows < N)",
+		note: `Write the ${PROJ_BLOCK_N} outputs. The store converts them back to the output's 16-bit type.`,
+		kind: "bytes",
+	},
+];
+
+export const tiledLaunch = [
+	{
+		code: `project[(triton.cdiv(N, ${PROJ_BLOCK_N}),)](w, x, y, N, K, BLOCK_N=${PROJ_BLOCK_N}, BLOCK_K=${PROJ_BLOCK_K})`,
+		note: `One program per tile of rows, rounding up: ${count(grid.programs)} for the projection into the experts.`,
+	},
+];
+
+Every single-user pass pulls {count(passBytesPerGpu() / 1e9)} GB from HBM into the busiest GPU's registers, and code running on the compute blocks asks for every byte. A GPU runs that code as a <Term id="kernel">kernel</Term>: many copies of one function at once, each on its own piece of the work. When a new model combines pieces that stock libraries were not tuned together for (such as 4-bit NVFP4 experts, custom attention gating, and hybrid FP8 attention), generic kernels can land several times above the hardware floor, which is why kernel engineers and coding agents edit them directly.
+
+The kernels here are written in <Term id="triton">Triton</Term>, a Python-like language where you write what one copy does to an entire block of data while the compiler handles thread layout and how threads load memory (rather than hand-scheduling individual threads in CUDA). Its <a href="https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html">vector-add tutorial</a> is about the shortest complete kernel there is.
+
+## One program per output
+
+Take the twelve-weight projection: a matrix-vector multiply (<Term id="gemv">GEMV</Term>) producing three outputs, each a weighted sum of the token's four numbers with its own row of four weights. Because no output depends on another, three copies of the function can compute them at once if each knows which row it owns.
+
+<Figure surface="paper" label="the twelve-weight projection as three programs">
+	<TiledProjection show={["programs"]} />
+</Figure>
+
+Each running copy of a Triton kernel is a <Term id="program">program</Term>. Program 2 computes output 2: it loads row 2 of the weights and all four of the token's numbers, and writes {worked(p2.y)}. The only difference between the three programs is the number each is given.
+
+A program is not a thread. Triton runs each program on one compute block as a group of threads ({TRITON_WARPS} warps by default, closest to a thread block in CUDA), and one block can hold several programs at once. Programs start whenever a block has room and finish in no fixed order, so none may assume another has finished.
+
+## Before the code: what moves
+
+Across the three programs, all {toyTrips.weightLoads} weights are read once each, the token's four numbers {W.length} times over, and {toyTrips.stores} outputs are written. At real model sizes, weights are nearly all of it, because a token brings {count(HIDDEN)} numbers while a table has millions of weights. In plain steps, one program does this:
+
+<Figure surface="paper" label="one program, in plain steps">
+	<KernelCode lines={pseudo} />
+</Figure>
+
+## Kernel 1, line by line
+
+The CPU starts a kernel with one <Term id="launch">launch</Term> naming the function, how many programs to run (the grid, in square brackets), and the shared arguments. It comes first because it fixes how many programs run. Below is the launch followed by the body, with program {p2.row}'s values beside each line. Lines marked <Key as="bytes">move data</Key> between memory and the program; lines marked <Key as="math">do arithmetic</Key>.
+
+<Figure surface="paper" label="kernel 1 on the toy: the launch, then program 2">
+	<KernelCode lines={launch} title="the launch" />
+	<KernelCode lines={toy} title="the body" />
+</Figure>
+
+Each line operates on a whole tile at once: `cols` holds four indices, `tl.load` fetches four weights, and `w * x` multiplies four pairs while Triton divides that work across the program's threads.
+
+## Tiles, a loop, and a mask
+
+The real projections have the same shape at larger sizes. Below are the five dense projections on one GPU, drawn to scale with width for inputs and height for outputs. Each GPU owns {Q_HEADS} query heads and {KV_HEADS} key-value heads of {HEAD_DIM} numbers each. That gives `out of attention` {count(attnOut.cols)} inputs ({Q_HEADS} × {HEAD_DIM}), while `into attention` packs {Q_HEADS} query heads, {Q_HEADS} companion gate heads that scale attention's output afterward, {KV_HEADS} key heads, and {KV_HEADS} value heads into {count(qkvGate.rows)} outputs.
+
+<Figure surface="paper" label="the five projections of one layer, to scale">
+	<ProjectionSizes names={NAMES} />
+</Figure>
+
+The projection into the experts (`pooler`) has {count(pooler.rows)} rows of {count(pooler.cols)} weights. One program per row would spawn {count(pooler.rows)} tiny programs, so the kernel assigns each program a block of rows called a <Term id="tile">tile</Term>.
+
+Tiles rarely divide a table evenly, and the last one overhangs the edge. To keep out-of-bounds slots from reading invalid memory, the kernel carries a boolean <Term id="mask">mask</Term> switching off places past the edge. On the 3-row toy, tiles of two rows make two programs, and the second tile has only one real row, leaving one slot hanging past the edge.
+
+<Figure surface="paper" label="tiles of two rows">
+	<TiledProjection show={["tiles"]} />
+</Figure>
+
+At the real size, tiles of {PROJ_BLOCK_N} rows divide {count(pooler.rows)} rows into {count(pooler.rows)} ÷ {PROJ_BLOCK_N} = {count(grid.programs)} programs across the H200's {H200.sms} compute blocks.
+
+<Figure surface="paper" label="tiles of rows handed to compute blocks">
+	<TiledProjection show={["real"]} />
+</Figure>
+
+The real-size kernel also adds a loop along the columns, because {PROJ_BLOCK_N} full rows of {count(pooler.cols)} weights will not fit in registers at once. Each program walks {PROJ_BLOCK_K} columns at a time ({grid.steps} steps), keeping each row's running sum in <Term id="fp32">FP32</Term> so adding thousands of products does not drift from 16-bit rounding. Total data read is unchanged: each weight still crosses memory once and does two operations.
+
+<Deeper title="Kernel 1 at the real size, line by line">
+	<p>
+		Each program owns a 2D block of rows by columns described with two 1D index lists. Triton borrows NumPy's broadcasting notation: <code>rows[:, None]</code> stands the rows up as a column, <code>cols[None, :]</code> lays the columns down as a row, and adding them builds a grid with one entry for every pair. <code>axis=1</code> sums along each row. Here is program 1 of the toy in tiles of two rows:
+	</p>
+	<TileGrid />
+	<p>
+		The real kernel runs this pattern over a {PROJ_BLOCK_N} × {PROJ_BLOCK_K} tile for {grid.steps} steps, adding tiled rows, the loop, and the mask.
+	</p>
+	<KernelCode lines={tiledLaunch} title="the launch" />
+	<KernelCode lines={tiled} title="the body" />
+</Deeper>
+
+## Neighbors in memory
+
+Why walk along a row rather than down a column? Weight tables sit in memory row after row, so neighboring weights in a row have neighboring addresses. GPU memory hands data over in {MEMORY_SECTOR_BYTES}-byte sectors. When the {H200.warpSize} threads of a warp request neighboring addresses, their requests merge into a few whole sectors; when they stride down a column far apart, each thread costs its own sector.
+
+<Figure surface="paper" label="one warp's reads, together and scattered">
+	<Coalesce />
+</Figure>
+
+Reading down a column asks for {scattered} times as many sectors for the same {H200.warpSize} weights. Some of those sectors may already sit in the L2 cache, yet scattered reads still waste the bandwidth that sets the time. Combining neighboring reads into wide transactions is <Term id="coalescing">coalescing</Term>, and Triton arranges threads to get it whenever the tile's inner dimension walks contiguously along memory.
+
+## What sets its time
+
+Kernel 1 reads each weight once and performs two operations on it (1 operation per byte), far below both the tensor-core ridge (~{balance}) and the FP32 CUDA-core ridge (~{fp32Balance}). Computing `tl.sum(w * x)` on scalar CUDA cores therefore does not hold single-token decode back. Its ideal time is bytes over bandwidth: {us(floorUs(projectionCost(pooler, 1)))} for `pooler`, {us(layerUs)} for all five projections in one layer, or {us(layerUs * LAYERS.total)} across {LAYERS.total} layers.
+
+A real kernel falls short of that floor when too few programs keep too few requests in flight to saturate HBM, when uncoalesced reads waste memory sectors, or when a program waits for one tile to finish multiplying before requesting the next (rather than prefetching the next tile while multiplying the current one, called software pipelining).
+
+## An edit that changes only the time
+
+Suppose an agent edits one number in Kernel 1's launch, the tile height `BLOCK_N`, leaving the body untouched.
+
+<Figure label="the same kernel, four tile heights">
+	<TileEdit />
+</Figure>
+
+Every tile height produces the same outputs, because each row is summed in the same order. What changes is how the grid maps onto the chip (the drawing illustrates an even spread across blocks; actual concurrent residency also depends on registers, shared memory, and hardware scheduling):
+- At <code>BLOCK_N = {PROJ_BLOCK_N}</code>, `pooler` launches {count(grid.programs)} programs on {H200.sms} compute blocks, leaving {count(grid.idle)} blocks idle and putting at most one program ({TRITON_WARPS} warps) on each active block.
+- Halving `BLOCK_N` to {PROJ_BLOCK_N / 2} launches {count(halfTiles)} programs, covering all {H200.sms} blocks and allowing up to two resident programs ({TRITON_WARPS * 2} warps) per block when registers permit, keeping more memory requests in flight.
+- Shrinking `BLOCK_N` to 1 floods the grid with {count(pooler.rows)} tiny programs, issuing {count(pooler.rows)} logical loads of the token's {count(HIDDEN)}-number vector (most hitting cache, yet still paying instruction and scheduling overhead per row).
+
+Short tables face an even tighter grid limit: `router` has only {count(router.rows)} rows, so at <code>BLOCK_N = {PROJ_BLOCK_N}</code> it launches just {routerGrid.programs} programs on {H200.sms} compute blocks. When splitting rows cannot fill the chip, kernels split along the columns (`K`) as well, a technique called <Term id="splitK">split-K</Term> that returns in Chapter 7.
+
+Tile width (`BLOCK_K`), warps per program (`num_warps`), prefetch stages (`num_stages`), and tile order are choices of the same kind. None changes the mathematical specification (changing `BLOCK_K` reorders floating-point additions, so outputs are checked within a tolerance rather than bit for bit). That is what lets an agent optimize a kernel it could not derive from scratch: change a launch setting, check accuracy against a reference, time it, and keep the faster version.
+
+<InTheChallenge problem="muse_bf16_proj">
+	<p>
+		<code>muse_bf16_proj</code> benchmarks all five projections from 1 token up to {count(maxTokens)}, weighted across {LAYERS.total} layers. Combined across its loads, the ideal floor is {us(times.ideal)} per pass, SGLang takes {us(times.sglang)}{times.best !== undefined && <>, and the best entry takes {us(times.best)}</>}.
+	</p>
+	<p>
+		The tension is across batch sizes: at 1 token the five tables are memory-bound GEMVs where scalar CUDA cores keep up easily, while by {count(maxTokens)} tokens arithmetic catches up and kernels must switch to tensor-core matrix tiles.
+	</p>
+</InTheChallenge>
+
+A projection is one kernel, while a layer runs about {chainLength} kernels in a row, from multi-megabyte tables to tiny steps touching a few kilobytes. Each must finish before the next can use its output. What does each handoff cost?

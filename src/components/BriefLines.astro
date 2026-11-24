@@ -1,0 +1,78 @@
+---
+// A task brief's computation block, line by line from the snapshot, each with a plain reading and
+// the chapters that explain it. The build fails if the brief's lines and the readings fall out of step.
+import { href, STOPS } from "../data/stops";
+import { type ProblemName, problem } from "../lib/challenge";
+
+type Note = { reading: string; chapters: string[] };
+type Props = { problem: ProblemName; notes: Note[] };
+const { notes } = Astro.props;
+const lines = problem(Astro.props.problem).computation.split("\n");
+if (lines.length !== notes.length)
+	throw new Error(
+		`${Astro.props.problem}'s brief has ${lines.length} lines; BriefLines has ${notes.length} readings`,
+	);
+const stop = (slug: string) => {
+	const s = STOPS.find((x) => x.slug === slug);
+	if (!s) throw new Error(`no chapter with slug "${slug}"`);
+	return s;
+};
+---
+
+<ol class="brief">
+	{
+		lines.map((line, i) => (
+			<li>
+				<pre><code>{line}</code></pre>
+				<p>
+					{notes[i].reading}
+					{notes[i].chapters.length > 0 && (
+						<span class="see">
+							{" "}
+							(
+							{notes[i].chapters.map((slug, j) => (
+								<>
+									{j > 0 && ", "}
+									<a href={href(stop(slug))}>chapter {stop(slug).label}</a>
+								</>
+							))}
+							)
+						</span>
+					)}
+				</p>
+			</li>
+		))
+	}
+</ol>
+
+<style>
+	.brief {
+		list-style: none;
+		margin: 1.5rem 0 2rem;
+		padding: 0;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 1rem;
+	}
+	pre {
+		margin: 0;
+		padding: 0.5rem 0.75rem;
+		overflow-x: auto;
+		background: var(--paper-2);
+		border: 1px solid var(--rule);
+		font: 0.8125rem/1.5 var(--mono);
+	}
+	code {
+		font: inherit;
+		background: none;
+		padding: 0;
+	}
+	p {
+		margin: 0.375rem 0 0;
+		font-size: 1rem;
+		line-height: 1.55;
+	}
+	.see {
+		color: var(--ink-2);
+	}
+</style>

@@ -1,0 +1,367 @@
+---
+// The shell's navigation. Wide screens get a rail of contents beside the article; narrower ones a
+// slim bar with the current chapter, a contents menu and the theme button.
+import { STOPS } from "../data/stops";
+import Route from "./Route.astro";
+
+type Props = { current: string };
+const { current } = Astro.props;
+const here = STOPS.find((s) => s.slug === current);
+const words = ["one", "token", "at", "a", "time"];
+---
+
+<aside class="rail" aria-label="Guide">
+	<a class="wordmark" href="/" aria-label="One token at a time, the opening">
+		{words.map((w) => <span>{w}</span>)}
+	</a>
+	<nav id="rail-contents" aria-label="Contents">
+		<Route compact current={current} />
+	</nav>
+	<div class="rail-foot">
+		<button class="fold-rail" type="button" aria-expanded="true" aria-controls="rail-contents" aria-label="Collapse contents">
+			<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+				<path d="M2 2v12" stroke="currentColor" fill="none"></path>
+				<path d="M13 4 8 8l5 4" stroke="currentColor" fill="none"></path>
+			</svg>
+		</button>
+		<a href="/glossary" aria-current={current === "glossary" ? "page" : undefined}>glossary</a>
+		<button class="theme" type="button" aria-pressed="false" aria-label="Dark theme">
+			<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+				<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor"></circle>
+				<path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"></path>
+			</svg>
+			<span class="label">dark theme</span>
+		</button>
+	</div>
+</aside>
+
+<header class="bar">
+	<div class="bar-id">
+		<a class="wordmark" href="/" aria-label="One token at a time, the opening">
+			{words.map((w) => <span>{w}</span>)}
+		</a>
+		{
+			here && here.n > 0 && (
+				<span class="bar-here">
+					<span class="n">{here.label}</span> {here.title}
+				</span>
+			)
+		}
+	</div>
+	<button class="icon" type="button" popovertarget="contents" aria-label="Contents">
+		<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+			<path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.25" fill="none"></path>
+		</svg>
+	</button>
+	<button class="icon theme" type="button" aria-pressed="false" aria-label="Dark theme">
+		<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+			<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor"></circle>
+			<path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"></path>
+		</svg>
+	</button>
+	<div id="contents" class="menu" popover="auto">
+		<nav aria-label="Contents">
+			<Route compact current={current} />
+		</nav>
+		<p class="menu-foot"><a href="/glossary">glossary</a></p>
+	</div>
+</header>
+
+<script>
+	const syncRail = () => {
+		const min = document.documentElement.dataset.rail === "min";
+		for (const b of document.querySelectorAll<HTMLButtonElement>(".fold-rail")) {
+			b.setAttribute("aria-expanded", String(!min));
+			b.setAttribute("aria-label", min ? "Expand contents" : "Collapse contents");
+		}
+	};
+	document.addEventListener("astro:page-load", () => {
+		syncRail();
+		for (const b of document.querySelectorAll<HTMLButtonElement>(".fold-rail")) {
+			b.addEventListener("click", () => {
+				const root = document.documentElement;
+				const min = root.dataset.rail !== "min";
+				if (min) root.dataset.rail = "min";
+				else delete root.dataset.rail;
+				try {
+					localStorage.setItem("rail", min ? "min" : "full");
+				} catch {}
+				syncRail();
+			});
+		}
+	});
+
+	const sync = () => {
+		const dark = String(document.documentElement.dataset.theme === "dark");
+		for (const b of document.querySelectorAll(".theme")) b.setAttribute("aria-pressed", dark);
+	};
+
+	// The buttons and the OS setting can change the theme.
+	document.addEventListener("themechange", sync);
+	document.addEventListener("astro:page-load", () => {
+		sync();
+		for (const b of document.querySelectorAll<HTMLButtonElement>(".theme")) {
+			b.addEventListener("click", () => {
+				const root = document.documentElement;
+				root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+				try {
+					localStorage.setItem("theme", root.dataset.theme);
+				} catch {}
+				document.dispatchEvent(new CustomEvent("themechange"));
+			});
+		}
+	});
+</script>
+
+<style>
+	/* The wordmark is set as five tokens, the guide's unit, with a hairline between each. */
+	.wordmark {
+		display: inline-flex;
+		flex-wrap: wrap;
+		font-family: var(--mono);
+		font-size: 0.6875rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		text-decoration: none;
+		color: var(--ink);
+	}
+	.wordmark span {
+		padding: 0.15rem 0.3rem;
+		border-block: 1px solid var(--rule);
+		border-left: 1px solid var(--rule);
+		transition: background-color var(--fast) var(--ease);
+	}
+	.wordmark span:last-child {
+		border-right: 1px solid var(--rule);
+	}
+	.wordmark:hover span {
+		background: var(--faint);
+	}
+
+	.rail {
+		display: none;
+		--edge: 1.75rem;
+	}
+	.fold-rail {
+		flex: none;
+		display: grid;
+		place-items: center;
+		width: 1.75rem;
+		height: 1.75rem;
+		padding: 0;
+		color: var(--ink-2);
+		background: none;
+		border: 0;
+		cursor: pointer;
+		transition: color var(--fast) var(--ease);
+	}
+	.fold-rail:hover {
+		color: var(--ink);
+	}
+	.fold-rail svg {
+		transition: transform var(--slow) var(--ease);
+	}
+	:global(:root[data-rail="min"]) .fold-rail svg {
+		transform: scaleX(-1);
+	}
+	@media (min-width: 64rem) {
+		.rail {
+			position: sticky;
+			top: 0;
+			display: flex;
+			flex-direction: column;
+			gap: 2.25rem;
+			height: 100dvh;
+			overflow-y: auto;
+			overscroll-behavior: contain;
+			padding: 2.25rem 1.25rem 1.5rem 1.75rem;
+			border-right: 1px solid var(--faint);
+		}
+		.rail nav {
+			flex: 1;
+		}
+		:global(:root[data-rail="min"]) {
+			--rail-width: 4.25rem;
+		}
+		:global(:root[data-rail="min"]) .rail {
+			--edge: 0.5rem;
+			padding-inline: 0.5rem;
+			align-items: center;
+			overflow-x: hidden;
+		}
+		:global(:root[data-rail="min"]) .rail .wordmark,
+		:global(:root[data-rail="min"]) .rail-foot a,
+		:global(:root[data-rail="min"]) .rail .theme .label,
+		:global(:root[data-rail="min"]) .rail :global(.part-name),
+		:global(:root[data-rail="min"]) .rail :global(.t) {
+			display: none;
+		}
+		:global(:root[data-rail="min"]) .rail nav {
+			width: 100%;
+		}
+		:global(:root[data-rail="min"]) .rail :global(.toc a) {
+			grid-template-columns: 1fr;
+			justify-items: center;
+			padding-block: 0.4rem;
+		}
+		:global(:root[data-rail="min"]) .rail :global(.toc .part + .part) {
+			margin-top: 0.75rem;
+			padding-top: 0.75rem;
+			border-top: 1px solid var(--faint);
+		}
+		:global(:root[data-rail="min"]) .rail-foot {
+			flex-direction: column;
+			justify-content: center;
+			width: 100%;
+		}
+	}
+	.rail-foot {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0 1.25rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--faint);
+		font-family: var(--mono);
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.rail-foot a {
+		color: var(--ink-2);
+	}
+	.rail-foot a:hover,
+	.rail-foot a[aria-current] {
+		color: var(--ink);
+	}
+	.theme {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-height: 2.25rem;
+		padding: 0;
+		font: inherit;
+		color: var(--ink-2);
+		background: none;
+		border: 0;
+		cursor: pointer;
+		transition: color var(--fast) var(--ease);
+	}
+	.theme:hover {
+		color: var(--ink);
+	}
+	.theme svg {
+		transition: transform var(--slow) var(--ease);
+	}
+	.theme[aria-pressed="true"] svg {
+		transform: rotate(180deg);
+	}
+
+	.bar {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		height: var(--bar-height);
+		padding: 0 calc(var(--gutter) - 0.5rem) 0 var(--gutter);
+		background: color-mix(in oklab, var(--paper) 92%, transparent);
+		backdrop-filter: blur(8px);
+		border-bottom: 1px solid var(--faint);
+		font-family: var(--mono);
+		font-size: 0.75rem;
+	}
+	.bar-id {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem 1rem;
+		min-width: 0;
+		margin-right: auto;
+	}
+	.bar .wordmark {
+		flex: none;
+	}
+	.bar-here {
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		color: var(--ink);
+	}
+	.bar-here .n {
+		color: var(--ink-2);
+		margin-right: 0.25rem;
+	}
+	/* Under 40rem the chapter sits under the wordmark, so a long title still fits. */
+	@media (max-width: 40rem) {
+		.bar-id {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+		.bar .wordmark {
+			font-size: 0.625rem;
+		}
+		.bar .wordmark span {
+			padding: 0 0.25rem;
+		}
+	}
+	@media (min-width: 64rem) {
+		.bar {
+			display: none;
+		}
+	}
+	.icon {
+		flex: none;
+		display: grid;
+		place-items: center;
+		width: 2.75rem;
+		height: 2.75rem;
+		padding: 0;
+		color: var(--ink-2);
+		background: none;
+		border: 0;
+		cursor: pointer;
+	}
+	.icon:hover {
+		color: var(--ink);
+	}
+
+	.menu {
+		--edge: 1.25rem;
+		position: fixed;
+		inset: calc(var(--bar-height) + 0.25rem) var(--gutter) auto auto;
+		margin: 0;
+		width: min(20rem, calc(100vw - 2 * var(--gutter)));
+		max-height: calc(100dvh - var(--bar-height) - 1rem);
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		padding: 1.25rem 1.25rem 0.75rem;
+		border: 1px solid var(--rule);
+		border-radius: 2px;
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--serif);
+		box-shadow: var(--shadow-pop);
+		opacity: 1;
+		transition:
+			opacity var(--fast) var(--ease),
+			display var(--fast) allow-discrete,
+			overlay var(--fast) allow-discrete;
+	}
+	.menu:not(:popover-open) {
+		opacity: 0;
+	}
+	@starting-style {
+		.menu:popover-open {
+			opacity: 0;
+		}
+	}
+	.menu-foot {
+		margin: 1.25rem 0 0;
+		padding-top: 0.75rem;
+		border-top: 1px solid var(--faint);
+		font: 0.75rem/1.5 var(--mono);
+	}
+	.menu-foot a {
+		color: var(--ink-2);
+	}
+</style>

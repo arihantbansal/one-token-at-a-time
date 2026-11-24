@@ -1,0 +1,258 @@
+---
+import "@fontsource-variable/source-serif-4/opsz.css";
+import "@fontsource-variable/source-serif-4/opsz-italic.css";
+import "../styles/global.css";
+import { ClientRouter } from "astro:transitions";
+import TrailNav from "../components/TrailNav.astro";
+import { fetchedAt, formatDate } from "../lib/challenge";
+
+type Props = { title: string; description: string; slug: string };
+const { title, description, slug } = Astro.props;
+const pageTitle = slug === "" ? "One token at a time" : `${title} · One token at a time`;
+// Built from the slug: with file output, Astro.url.pathname ends in .html at build time.
+const canonical = slug === "404" ? undefined : new URL(`/${slug}`, Astro.site);
+const image = new URL("/og.png", Astro.site);
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{pageTitle}</title>
+		<meta name="description" content={description} />
+		{canonical && <link rel="canonical" href={canonical} />}
+		<meta property="og:type" content="website" />
+		<meta property="og:site_name" content="One token at a time" />
+		<meta property="og:title" content={pageTitle} />
+		<meta property="og:description" content={description} />
+		{canonical && <meta property="og:url" content={canonical} />}
+		<meta property="og:image" content={image} />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+		<meta property="og:image:alt" content="One token at a time: an illustrated guide to how an AI writes a reply." />
+		<meta name="twitter:card" content="summary_large_image" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="preload" href="/fonts/DepartureMono-Regular.woff2" as="font" type="font/woff2" crossorigin />
+		<script is:inline>
+			(() => {
+				const dark = matchMedia("(prefers-color-scheme: dark)");
+				const apply = (root) => {
+					let t = null;
+					try {
+						t = localStorage.getItem("theme");
+					} catch {}
+					root.dataset.theme = t === "light" || t === "dark" ? t : dark.matches ? "dark" : "light";
+				};
+				apply(document.documentElement);
+				const rail = (root) => {
+					let v = null;
+					try {
+						v = localStorage.getItem("rail");
+					} catch {}
+					if (v === "min") root.dataset.rail = "min";
+					else delete root.dataset.rail;
+				};
+				rail(document.documentElement);
+				dark.addEventListener("change", () => {
+					apply(document.documentElement);
+					document.dispatchEvent(new CustomEvent("themechange"));
+				});
+				// The router copies the new page's root attributes, so set the theme there first.
+				document.addEventListener("astro:before-swap", (e) => {
+					apply(e.newDocument.documentElement);
+					rail(e.newDocument.documentElement);
+				});
+			})();
+		</script>
+		<ClientRouter />
+	</head>
+	<body>
+		<a class="skip" href="#main">Skip to the article</a>
+		<div class="shell">
+			<TrailNav current={slug} />
+			<main id="main">
+				<slot />
+				<footer class="site-footer">
+					<p>Unofficial, not affiliated with Meta. Figures from the challenge's public data, {formatDate(fetchedAt)}.</p>
+					<nav aria-label="More">
+						<a href="/glossary">glossary</a>
+						<a href="https://openkernelchallenge.dev/">the challenge</a>
+						<a href="/llms.txt">llms.txt</a>
+					</nav>
+				</footer>
+			</main>
+		</div>
+		<div class="ruler" aria-hidden="true">
+			<div class="ticks"></div>
+			<div class="ruler-mark"><span class="ruler-read">0.00</span></div>
+		</div>
+	</body>
+</html>
+
+<script>
+	// Links written as raw <a> tags in MDX skip the markdown link plugin, so mark them here.
+	const markExternal = () => {
+		for (const a of document.querySelectorAll<HTMLAnchorElement>("a[href^='http']")) {
+			if (a.origin === location.origin) continue;
+			a.target = "_blank";
+			a.rel = "noopener noreferrer";
+		}
+	};
+	document.addEventListener("astro:page-load", markExternal);
+</script>
+
+<script>
+	// The ruler on the right edge reads how far down the page the reader is, from 0.00 to 1.00.
+	// Under reduced motion the reading changes but the mark stays put.
+	const still = matchMedia("(prefers-reduced-motion: reduce)");
+	let queued = false;
+	const draw = () => {
+		queued = false;
+		const ruler = document.querySelector<HTMLElement>(".ruler");
+		if (!ruler || ruler.getClientRects().length === 0) return;
+		const doc = document.documentElement;
+		const span = doc.scrollHeight - innerHeight;
+		const p = span > 0 ? Math.min(1, Math.max(0, scrollY / span)) : 0;
+		const read = ruler.querySelector(".ruler-read");
+		if (read) read.textContent = p.toFixed(2);
+		const mark = ruler.querySelector<HTMLElement>(".ruler-mark");
+		if (mark) mark.style.setProperty("--p", still.matches ? "0" : String(p));
+	};
+	const queue = () => {
+		if (queued) return;
+		queued = true;
+		requestAnimationFrame(draw);
+	};
+	addEventListener("scroll", queue, { passive: true });
+	addEventListener("resize", queue);
+	document.addEventListener("astro:page-load", queue);
+</script>
+
+<style>
+	.skip {
+		position: absolute;
+		left: 1rem;
+		top: -3rem;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		background: var(--ink);
+		color: var(--paper);
+		padding: 0.5rem 0.75rem;
+		z-index: 20;
+	}
+	.skip:focus {
+		top: 0.5rem;
+	}
+	@media (min-width: 64rem) {
+		.shell {
+			display: grid;
+			grid-template-columns: var(--rail-width) minmax(0, 1fr);
+			align-items: start;
+		}
+		main {
+			grid-column: 2;
+			padding-right: var(--ruler-width);
+			background: var(--paper);
+			min-height: 100dvh;
+		}
+	}
+	main {
+		background: var(--paper);
+	}
+	.site-footer {
+		max-width: calc(var(--measure) + 2 * var(--gutter));
+		margin: 2.5rem auto 0;
+		padding: 1.5rem var(--gutter) 3rem;
+		font-size: 1rem;
+		line-height: 1.6;
+		color: var(--ink-2);
+	}
+	.site-footer::before {
+		content: "";
+		display: block;
+		margin-bottom: 1.5rem;
+		border-top: 1px solid var(--faint);
+	}
+	.site-footer p {
+		margin: 0 0 0.25rem;
+	}
+	.site-footer nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 0.5rem;
+	}
+	.site-footer nav a + a::before {
+		content: "\00b7" / "";
+		display: inline-block;
+		margin-right: 0.5rem;
+		text-decoration: none;
+	}
+	.site-footer nav a {
+		color: var(--ink-2);
+	}
+	.site-footer nav a:hover {
+		color: var(--ink);
+	}
+
+	.ruler {
+		display: none;
+	}
+	@media (min-width: 64rem) {
+		.ruler {
+			position: fixed;
+			top: 3.5rem;
+			bottom: 3.5rem;
+			right: 0;
+			z-index: 5;
+			display: block;
+			width: var(--ruler-width);
+			container-type: size;
+			pointer-events: none;
+		}
+	}
+	/* Fifty minor ticks and ten major ones, drawn to the ruler's height. */
+	.ticks {
+		position: absolute;
+		inset: 0 0.75rem 0 auto;
+		width: 0.875rem;
+		background:
+			repeating-linear-gradient(to bottom, var(--ink-2) 0 1px, transparent 1px 10%) right top / 0.875rem 100%
+				no-repeat,
+			repeating-linear-gradient(to bottom, var(--rule) 0 1px, transparent 1px 2%) right top / 0.4375rem 100%
+				no-repeat;
+	}
+	.ticks::after {
+		content: "";
+		position: absolute;
+		right: 0;
+		bottom: 0;
+		width: 0.875rem;
+		height: 1px;
+		background: var(--ink-2);
+	}
+	.ruler-mark {
+		position: absolute;
+		top: 0;
+		right: 0.75rem;
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+		height: 1px;
+		transform: translateY(calc(var(--p, 0) * 100cqh));
+	}
+	.ruler-mark::after {
+		content: "";
+		width: 1.25rem;
+		height: 1px;
+		margin-right: -0.375rem;
+		background: var(--ink);
+	}
+	.ruler-read {
+		padding: 0 0.125rem;
+		background: var(--paper);
+		font: 0.6875rem/1 var(--mono);
+		font-variant-numeric: tabular-nums;
+		color: var(--ink);
+	}
+</style>

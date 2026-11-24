@@ -1,0 +1,207 @@
+---
+// The chapters in order, grouped by part. `compact` is the short list the rail and the contents
+// menu show, with the `current` chapter marked; the full list, for the opening page, adds each
+// chapter's question and its reading time.
+import { href, PARTS, type Part, STOPS } from "../data/stops";
+
+type Props = { compact?: boolean; current?: string };
+const { compact = false, current = "" } = Astro.props;
+
+const parts = (Object.keys(PARTS) as Part[])
+	.map((part) => ({ part, name: PARTS[part], stops: STOPS.filter((s) => s.part === part) }))
+	.filter((p) => p.stops.length > 0);
+
+// Reading time from each page's source: the prose without frontmatter, imports, tags and
+// expressions, at 230 words a minute.
+const sources = import.meta.glob<string>("../pages/*.mdx", { query: "?raw", import: "default", eager: true });
+const minutes = (slug: string) => {
+	const raw = sources[`../pages/${slug || "index"}.mdx`];
+	if (!raw) return undefined;
+	const prose = raw
+		.replace(/^---[\s\S]*?---/, "")
+		.replace(/^(import|export) .*$/gm, "")
+		.replace(/<[^>]*>/g, " ")
+		.replace(/\{[^{}]*\}/g, " n ");
+	const words = prose.match(/[A-Za-z0-9][\w'’.,-]*/g)?.length ?? 0;
+	return Math.max(1, Math.round(words / 230));
+};
+---
+
+{
+	compact ? (
+		<ol class="toc">
+			{parts.map((p) => (
+				<li class="part">
+					<span class="meta part-name">{p.name}</span>
+					<ol>
+						{p.stops.map((s) => (
+							<li>
+								<a
+									href={href(s)}
+									title={s.title}
+									aria-label={`${s.label} ${s.title}`}
+									aria-current={s.slug === current ? "page" : undefined}
+								>
+									<span class="n" aria-hidden="true">
+										{s.label}
+									</span>
+									<span class="t">{s.title}</span>
+								</a>
+							</li>
+						))}
+					</ol>
+				</li>
+			))}
+		</ol>
+	) : (
+		<ol class="contents">
+			{parts.map((p) => (
+				<li class="part">
+					<span class="meta part-name">{p.name}</span>
+					<ol>
+						{p.stops.map((s) => {
+							const m = minutes(s.slug);
+							return (
+								<li>
+									<a href={href(s)} aria-current={s.slug === current ? "page" : undefined}>
+										<span class="n" aria-hidden="true">
+											{s.label}
+										</span>
+										<span class="t">{s.title}</span>
+										<span class="leader" aria-hidden="true" />
+										<span class="time">{m && `${m} min`}</span>
+										<span class="q">{s.question}</span>
+									</a>
+								</li>
+							);
+						})}
+					</ol>
+				</li>
+			))}
+		</ol>
+	)
+}
+
+<style>
+	ol {
+		list-style: none;
+		margin-block: 0;
+		padding: 0;
+	}
+	li + li {
+		margin-top: 0;
+	}
+	a {
+		text-decoration: none;
+	}
+	.n {
+		font-family: var(--mono);
+		font-size: 0.75rem;
+		font-variant-numeric: tabular-nums;
+		color: var(--ink-2);
+	}
+
+	/* The rail and the contents menu. */
+	.toc {
+		font-size: 0.9375rem;
+		line-height: 1.35;
+	}
+	.toc .part + .part {
+		margin-top: 1.5rem;
+	}
+	.toc .part-name {
+		display: block;
+		margin-bottom: 0.4rem;
+	}
+	.toc a {
+		display: grid;
+		grid-template-columns: 1.75rem minmax(0, 1fr);
+		align-items: baseline;
+		padding: 0.3rem 0;
+		color: var(--ink-2);
+		transition: color var(--fast) var(--ease);
+	}
+	.toc a:hover {
+		color: var(--ink);
+	}
+	.toc a:hover .t {
+		text-decoration: underline;
+		text-decoration-color: var(--rule);
+		text-underline-offset: 0.2em;
+	}
+	.toc a[aria-current="page"] {
+		color: var(--ink);
+		font-weight: 600;
+	}
+	.toc a[aria-current="page"] .n {
+		color: var(--ink);
+	}
+	.toc a {
+		position: relative;
+	}
+	.toc a[aria-current="page"]::before {
+		content: "";
+		position: absolute;
+		inset-block: 0.2rem;
+		left: calc(-1 * var(--edge, 1rem));
+		width: 2px;
+		background: var(--ink);
+	}
+
+	/* The full contents on the opening page. */
+	.contents {
+		margin-block: 2.5rem 3rem;
+	}
+	.contents .part + .part {
+		margin-top: 2.25rem;
+	}
+	.contents .part-name {
+		display: block;
+		padding-bottom: 0.6rem;
+		border-bottom: 1px solid var(--rule);
+	}
+	.contents a {
+		display: grid;
+		grid-template-columns: 2.25rem minmax(0, max-content) minmax(1.5rem, 1fr) auto;
+		align-items: baseline;
+		gap: 0.15rem 0.5rem;
+		padding: 0.9rem 0 0.95rem;
+		border-bottom: 1px dashed var(--rule);
+	}
+	.contents .n {
+		grid-row: 1;
+	}
+	.contents .t {
+		font-size: 1.1875rem;
+		font-weight: 600;
+		line-height: 1.3;
+	}
+	.contents .leader {
+		align-self: end;
+		height: 0.55em;
+		margin-bottom: 0.3em;
+		border-bottom: 2px dotted var(--rule);
+	}
+	.contents .time {
+		font-family: var(--mono);
+		font-size: 0.6875rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--ink-2);
+		white-space: nowrap;
+	}
+	.contents .q {
+		grid-column: 2 / -1;
+		line-height: 1.45;
+		color: var(--ink-2);
+	}
+	.contents a:hover .t {
+		text-decoration: underline;
+		text-decoration-color: currentColor;
+		text-underline-offset: 0.2em;
+		text-decoration-thickness: 1px;
+	}
+	.contents a[aria-current="page"] .n {
+		color: var(--ink);
+	}
+</style>

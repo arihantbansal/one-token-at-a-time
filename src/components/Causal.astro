@@ -1,0 +1,79 @@
+---
+// Which new token may look at which: each sees itself and everything before it.
+const N = 8;
+---
+
+<div class="causal">
+	<div
+		class="grid"
+		role="img"
+		aria-label={`A grid of ${N} new tokens. Token 1 may look only at itself, token 2 at tokens 1 and 2, and so on, forming a triangle.`}
+	>
+		<span></span>
+		<span class="axis top">looks at: earlier → later</span>
+		{
+			Array.from({ length: N }, (_, q) => (
+				<>
+					<span class="axis">token {q + 1}</span>
+					<span class="cells">
+						{Array.from({ length: N }, (_, k) => (
+							<i class={k <= q ? "seen" : "future"} />
+						))}
+					</span>
+				</>
+			))
+		}
+	</div>
+	<p class="key" aria-hidden="true">
+		<span><i class="seen"></i>may look</span>
+		<span><i class="future"></i>later, never looked at</span>
+	</p>
+</div>
+
+<style>
+	.causal {
+		display: grid;
+		justify-items: center;
+		gap: 1rem;
+		font: 0.75rem/1.2 var(--mono);
+		color: var(--ink-2);
+	}
+	.grid {
+		display: grid;
+		grid-template-columns: auto auto;
+		align-items: center;
+		gap: 3px 0.75rem;
+	}
+	.top {
+		padding-bottom: 0.25rem;
+	}
+	.cells {
+		display: grid;
+		grid-template-columns: repeat(8, var(--cell));
+		gap: 3px;
+		--cell: clamp(1rem, 5.5vw, 1.625rem);
+	}
+	i {
+		display: block;
+		width: var(--cell, 0.875rem);
+		height: var(--cell, 0.875rem);
+	}
+	.seen {
+		background: var(--ink);
+	}
+	.future {
+		border: 1px solid var(--rule);
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 0.375rem 1.25rem;
+		margin: 0;
+	}
+	.key span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+</style>

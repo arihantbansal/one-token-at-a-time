@@ -1,0 +1,196 @@
+---
+// A word whose definition opens in a small card beside it. The sentence around it should
+// already say what the word means; the card is there for readers who skipped or forgot.
+// Use it at a term's first mention on a page; the glossary page lists every term.
+import { type Entry, GLOSSARY, type TermId } from "../data/glossary";
+
+// A term's later mentions on the same page get a numbered id, so cards never share one. Component
+// frontmatter runs again for every render, so the count lives on globalThis, keyed by path.
+const store = globalThis as { __termSeen?: Map<string, Map<string, number>> };
+store.__termSeen ??= new Map();
+const seen = store.__termSeen;
+
+type Props = { id: TermId };
+const { id } = Astro.props;
+const entry: Entry = GLOSSARY[id];
+const counts = seen.get(Astro.url.pathname) ?? new Map<string, number>();
+seen.set(Astro.url.pathname, counts);
+const nth = (counts.get(id) ?? 0) + 1;
+counts.set(id, nth);
+const cardId = nth === 1 ? `term-${id}` : `term-${id}-${nth}`;
+---
+
+<button type="button" class="word" popovertarget={cardId} style={`anchor-name: --${cardId}`}><slot /></button><span
+	class="card"
+	id={cardId}
+	popover="auto"
+	style={`position-anchor: --${cardId}`}
+	><span class="name">{entry.term}</span><span class="def">{entry.short}</span><span class="card-foot"
+		>{
+			entry.link && (
+				<a href={entry.link.href} target="_blank" rel="noopener noreferrer">
+					{entry.link.label}
+				</a>
+			)
+		}<a href={`/glossary#${id}`}>Glossary</a></span
+	></span
+>
+
+<script>
+	// A card opens on hover after a short pause and closes shortly after the pointer leaves both the
+	// word and the card. Tap, Enter and Space open it through the button; Escape and light dismiss close it.
+	const OPEN_AFTER = 150;
+	const CLOSE_AFTER = 120;
+	let timer: number | undefined;
+	let hoverOpened: HTMLElement | undefined;
+
+	const word = (t: EventTarget | null) => (t instanceof Element ? t.closest<HTMLButtonElement>(".word") : null);
+	const card = (t: EventTarget | null) => (t instanceof Element ? t.closest<HTMLElement>(".card") : null);
+	const cardOf = (w: HTMLButtonElement) => w.popoverTargetElement as HTMLElement | null;
+
+	document.addEventListener("pointerover", (e) => {
+		if (e.pointerType !== "mouse") return;
+		const w = word(e.target);
+		const c = card(e.target);
+		if (!w && !c) return;
+		clearTimeout(timer);
+		if (c || !w) return;
+		const target = cardOf(w);
+		if (!target || target.matches(":popover-open")) return;
+		timer = window.setTimeout(() => {
+			target.showPopover();
+			hoverOpened = target;
+		}, OPEN_AFTER);
+	});
+
+	document.addEventListener("pointerout", (e) => {
+		if (e.pointerType !== "mouse") return;
+		const w = word(e.target);
+		const c = card(e.target);
+		if (!w && !c) return;
+		const to = e.relatedTarget;
+		if ((w && word(to) === w) || (c && card(to) === c)) return;
+		clearTimeout(timer);
+		const target = c ?? (w && cardOf(w));
+		if (!target) return;
+		timer = window.setTimeout(() => {
+			if (hoverOpened === target && target.matches(":popover-open")) target.hidePopover();
+			hoverOpened = undefined;
+		}, CLOSE_AFTER);
+	});
+
+	// A click on a word the pointer already opened keeps the card open rather than toggling it shut.
+	document.addEventListener(
+		"click",
+		(e) => {
+			const w = word(e.target);
+			const target = w && cardOf(w);
+			if (target && hoverOpened === target && target.matches(":popover-open")) {
+				e.preventDefault();
+				hoverOpened = undefined;
+			}
+		},
+		true,
+	);
+
+	// Light dismiss only follows clicks, so a card would stay open over the text after Tab moves on.
+	// Tab from the word into the card's own links keeps it open; Tab out of the card closes it.
+	document.addEventListener("focusout", (e) => {
+		const next = e.relatedTarget as Node | null;
+		if (!next) return;
+		const w = word(e.target);
+		const target = w ? cardOf(w) : card(e.target);
+		if (!target?.matches(":popover-open") || target.contains(next)) return;
+		if (!w && word(next) === (target.previousElementSibling as Element)) return;
+		target.hidePopover();
+	});
+</script>
+
+<style>
+	.word {
+		font: inherit;
+		color: inherit;
+		background: none;
+		border: 0;
+		padding: 0;
+		text-decoration: underline dotted var(--ink-2);
+		text-decoration-thickness: 1px;
+		text-underline-offset: 0.22em;
+	}
+	.word:focus:not(:focus-visible) {
+		outline: none;
+	}
+	.word:hover {
+		text-decoration-color: var(--ink);
+	}
+	.card {
+		/* A term can sit inside .nobreak, whose nowrap the card would otherwise inherit. */
+		white-space: normal;
+		inset: auto 1rem 1rem;
+		max-width: 22rem;
+		margin: 0 auto;
+		padding: 0.75rem 1rem 0.85rem;
+		border: 1px solid var(--rule);
+		border-radius: 2px;
+		background: var(--paper);
+		color: var(--ink);
+		box-shadow: var(--shadow-pop);
+		/* The card's margin is a gap the pointer crosses on its way from the word; the ::before below bridges it. */
+		overflow: visible;
+		font-family: var(--serif);
+		font-size: 0.9375rem;
+		line-height: 1.5;
+		text-align: left;
+		hyphens: none;
+	}
+	.card::before {
+		content: "";
+		position: absolute;
+		inset: -0.5rem;
+		z-index: -1;
+	}
+	.def {
+		position: relative;
+		z-index: 1;
+		display: block;
+	}
+	.card-foot {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		margin-top: 0.6rem;
+		padding-top: 0.5rem;
+		border-top: 1px dashed var(--rule);
+		font-family: var(--mono);
+		font-size: 0.75rem;
+		line-height: 1.4;
+	}
+	.card-foot a {
+		color: var(--ink-2);
+		overflow-wrap: anywhere;
+	}
+	.card-foot a:hover {
+		color: var(--ink);
+	}
+	.name {
+		display: block;
+		margin-bottom: 0.3rem;
+		font-family: var(--mono);
+		font-size: 0.6875rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--ink-2);
+	}
+	@supports (position-area: bottom) {
+		.card {
+			inset: auto;
+			margin: 0.4rem 0;
+			width: max-content;
+			max-width: min(22rem, calc(100vw - 2rem));
+			position-area: bottom span-right;
+			position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+		}
+	}
+</style>

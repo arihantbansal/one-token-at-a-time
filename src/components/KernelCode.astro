@@ -1,0 +1,135 @@
+---
+// Real kernel code, numbered, with a plain gloss for each line: beside it on wide frames, under it
+// on narrow ones. Lines that move data carry the bytes mark, lines that do arithmetic the math
+// mark. A wrapped line hangs two characters in from its own indent, so nothing scrolls sideways.
+type Line = { code: string; note?: string; kind?: "bytes" | "math" };
+type Props = { lines: Line[]; start?: number; title?: string };
+const { lines, start = 1, title } = Astro.props;
+
+const MARK = { bytes: "■", math: "●" } as const;
+const SAYS = { bytes: "moves data", math: "arithmetic" } as const;
+const rows = lines.map((l, i) => {
+	const indent = l.code.length - l.code.trimStart().length;
+	// Backticks in a gloss mark code.
+	const note = (l.note ?? "").split("`").map((text, j) => ({ text, code: j % 2 === 1 }));
+	return { ...l, n: start + i, indent, text: l.code.trimStart(), note };
+});
+---
+
+<div class="kernel-code">
+	{title && <p class="title">{title}</p>}
+	<ol class="lines" start={start}>
+		{
+			rows.map((r) => (
+				<li class="line" data-kind={r.kind}>
+					<span class="mark" aria-hidden="true">
+						{r.kind ? MARK[r.kind] : ""}
+					</span>
+					<span class="n" aria-hidden="true">
+						{r.n}
+					</span>
+					<code class="src" style={`--indent: ${r.indent}`}>
+						{r.text || " "}
+					</code>
+					{r.kind && <span class="sr">({SAYS[r.kind]})</span>}
+					{r.note.some((p) => p.text) && (
+						<span class="note">{r.note.map((p) => (p.code ? <code>{p.text}</code> : p.text))}</span>
+					)}
+				</li>
+			))
+		}
+	</ol>
+</div>
+
+<style>
+	.kernel-code {
+		container-type: inline-size;
+		font: 0.8125rem/1.5 var(--mono);
+		color: var(--ink);
+	}
+	.title {
+		margin: 0 0 0.75rem;
+		color: var(--ink-2);
+	}
+	.lines {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.line {
+		display: grid;
+		grid-template-columns: 1.25ch 2.5ch minmax(0, 1fr);
+		grid-template-areas: "mark n src" ". . note";
+		column-gap: 0.75ch;
+		padding: 0.3rem 0;
+		border-top: 1px dashed var(--rule);
+	}
+	.line:first-child {
+		border-top: 0;
+	}
+	.mark {
+		grid-area: mark;
+	}
+	[data-kind="bytes"] .mark {
+		color: var(--bytes);
+	}
+	[data-kind="math"] .mark {
+		color: var(--math);
+	}
+	.n {
+		grid-area: n;
+		text-align: right;
+		color: var(--ink-2);
+		font-variant-numeric: tabular-nums;
+	}
+	.src {
+		grid-area: src;
+		font: inherit;
+		margin: 0;
+		padding-block: 0;
+		border: 0;
+		border-radius: 0;
+		background: none;
+		box-shadow: none;
+		color: var(--ink);
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		padding-left: calc((var(--indent) * 0.5 + 2) * 1ch);
+		text-indent: -2ch;
+	}
+	.note {
+		grid-area: note;
+		margin-top: 0.15rem;
+		font-family: var(--serif);
+		font-size: 0.9375rem;
+		line-height: 1.45;
+		color: var(--ink-2);
+	}
+	.note code {
+		font: 0.8125rem var(--mono);
+		color: var(--ink);
+	}
+	.sr {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	@container (min-width: 46rem) {
+		.line {
+			grid-template-columns: 1.25ch 2.5ch minmax(0, 1.15fr) minmax(0, 1fr);
+			grid-template-areas: "mark n src note";
+			column-gap: 1ch;
+		}
+		.src {
+			padding-left: calc((var(--indent) + 2) * 1ch);
+		}
+		.note {
+			margin-top: 0;
+			padding-left: 1rem;
+			border-left: 1px solid var(--rule);
+		}
+	}
+</style>

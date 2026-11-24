@@ -1,0 +1,89 @@
+---
+// One token's eight experts as they might fall on the eight GPUs, and the time each GPU needs to
+// read its share at full speed. The all-reduce after the experts waits for the slowest.
+import { count, us } from "../lib/format";
+import { EXAMPLE_PLACEMENT } from "../lib/kernels";
+import { EXPERT_BYTES, memoryUs } from "../lib/model";
+
+const one = Math.round(memoryUs(EXPERT_BYTES) * 10) / 10;
+const gpus = EXAMPLE_PLACEMENT.map((n, i) => ({ i, n, t: Math.round(n * one * 10) / 10 }));
+const most = Math.max(...EXAMPLE_PLACEMENT);
+const slowest = gpus.find((g) => g.n === most)?.i ?? 0;
+---
+
+<div class="busiest">
+	<p class="head">one token, eight experts: reading them takes {us(one)} each</p>
+	<ol>
+		{
+			gpus.map((g) => (
+				<li class:list={{ last: g.i === slowest }}>
+					<span class="name">GPU {g.i}</span>
+					<span class="track" aria-hidden="true">
+						{Array.from({ length: g.n }, () => (
+							<i style={`width: ${100 / most}%`} />
+						))}
+					</span>
+					<span class="t">
+						{count(g.n)} {g.n === 1 ? "expert" : "experts"}, {us(g.t)}
+					</span>
+				</li>
+			))
+		}
+	</ol>
+	<p class="wait">the all-reduce can finish only after GPU {slowest} does, {us(gpus[slowest].t)} in</p>
+</div>
+
+<style>
+	.busiest {
+		display: grid;
+		gap: 0.75rem;
+		max-width: 34rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.head {
+		color: var(--ink);
+	}
+	ol {
+		display: grid;
+		gap: 0.375rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	li {
+		display: grid;
+		grid-template-columns: 3.75rem minmax(0, 1fr) 9rem;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.track {
+		display: flex;
+		gap: 2px;
+		height: 1rem;
+		border-left: 1px solid var(--ink-2);
+		border-right: 1px dashed var(--ink-2);
+	}
+	.track i {
+		background: var(--bytes);
+	}
+	.t {
+		font-variant-numeric: tabular-nums;
+	}
+	.last .name,
+	.last .t {
+		color: var(--ink);
+	}
+	@media (max-width: 26rem) {
+		li {
+			grid-template-columns: 3.75rem minmax(0, 1fr);
+		}
+		.t {
+			grid-column: 2;
+		}
+	}
+</style>

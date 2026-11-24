@@ -1,0 +1,74 @@
+---
+layout: ../layouts/Stop.astro
+slug: ""
+description: An illustrated guide to what happens when an AI model writes a reply, from the arithmetic for one token to the GPU that does it and the server that shares it, with real sizes from the Open Kernel Challenge.
+---
+
+import Figure from "../components/Figure.astro";
+import Key from "../components/Key.astro";
+import LoopStrip from "../components/LoopStrip.astro";
+import Route from "../components/Route.astro";
+import Term from "../components/Term.astro";
+import TokenLoop from "../components/TokenLoop.astro";
+import WeightBudget from "../components/WeightBudget.astro";
+import { decodeThroughput } from "../lib/challenge";
+import { count, us } from "../lib/format";
+import {
+	ACTIVE_WEIGHTS,
+	ARITHMETIC_TOKENS_PER_SECOND,
+	BALANCE_POINT,
+	GPUS,
+	getProjection,
+	H200,
+	TOTAL_WEIGHTS,
+} from "../lib/model";
+import { REPLY } from "../lib/tokenLoop";
+
+export const arithmetic = ARITHMETIC_TOKENS_PER_SECOND;
+export const onePerson = decodeThroughput(1).each;
+export const about = (n, step) => count(Math.round(n / step) * step);
+export const ratio = about(arithmetic / onePerson, 10);
+export const weightBytes = getProjection("pooler").bytesPerWeight;
+export const perWeight = Math.round(BALANCE_POINT * weightBytes);
+
+A server with {GPUS} NVIDIA H200 <Term id="gpu">GPUs</Term> has enough tensor-core arithmetic to write about {about(arithmetic, 1000)} <Term id="token">tokens</Term> a second, counting weight multiplications alone in a short conversation. Yet for one person in a long conversation, the hardware's ideal ceiling drops to about {about(onePerson, 10)}. A token is a word or a piece of one, so {about(onePerson, 10)} a second still outruns human reading speed, while running about 1/{ratio} as fast as the arithmetic allows.
+
+That gap shapes chat latency, serving costs, and kernel engineering across modern autoregressive language models. This guide traces it end to end: what a model computes for each token, how a GPU executes that work, and how a server shares it across many people. To ground every number in a real measured system, the shapes and timings come from Muse Spark Open, an open model from Meta, benchmarked against <Term id="sglang">SGLang</Term> (an open-source serving engine) in the <a href="https://openkernelchallenge.dev/">Open Kernel Challenge</a>. Both speeds above are ideal ceilings worked out from the chips' published limits; measured servers run slower than both, yet the gulf between them holds in practice.
+
+If you entered the Open Kernel Challenge with an agent editing kernels while you watched the leaderboard, this is the mental model behind those files. If you want the five-problem map first, start with [Appendix A](/challenge) and come back here.
+
+## A reply is a loop
+
+A language model does not write its reply in one go. It runs once to pick a single token, appends that token to the conversation, and runs again to pick the next. Each full run through the model is a <Term id="pass">pass</Term>.
+
+<Figure label="a reply, one pass per token">
+	<TokenLoop />
+</Figure>
+
+{count(REPLY.length)} tokens took {count(REPLY.length)} passes in sequence. Because each pass needs the token the previous one chose, passes cannot run side by side, so a long reply is thousands of them in a row. That makes the time of one pass the speed you feel: at {about(onePerson, 10)} tokens a second, one pass takes {us(1e6 / onePerson)} at best.
+
+The passes do not all take in the same amount of text.
+
+<Figure surface="paper" label="the first three passes">
+	<LoopStrip />
+</Figure>
+
+In ordinary generation, the opening pass reads your prompt (very long prompts are split into chunks), which is why a reply pauses before the first word appears. Writing the reply one token at a time after that is <Term id="decode">decode</Term>: each normal decode pass takes in only the newest token, so something from the earlier tokens must be carried forward between passes.
+
+## Where the time goes
+
+Inside a pass, almost all the work is one repeated calculation: multiplying the token's numbers by the model's <Term id="weights">weights</Term>. Weights are numbers fixed during training and shared by everyone using the model. Muse Spark Open holds {count(TOTAL_WEIGHTS / 1e9)} billion of them, and each token uses about {count(ACTIVE_WEIGHTS / 1e9)} billion. Because they sit in the GPU's main memory rather than inside the arithmetic circuits, every pass brings all of its active weights across the chip again.
+
+That leaves two hardware rates that govern this guide: <Key as="bytes">moving data</Key> and <Key as="math">arithmetic</Key>. Moving data is far slower. At peak bandwidth, for each 16-bit weight that arrives from memory, an H200 has time for about {count(perWeight)} multiplications or additions. Writing one token for one person uses each weight for two: one multiplication and one addition.
+
+<Figure surface="paper" label={`for each 16-bit weight, ${count(perWeight)} operations of time`}>
+	<WeightBudget />
+</Figure>
+
+The other {count(perWeight - 2)} go unused. With one person waiting for a reply, the chip spends nearly the whole pass waiting for weights to arrive while its arithmetic circuits stay mostly idle. That mismatch accounts for nearly all the distance from {about(arithmetic, 1000)} tokens a second down to {about(onePerson, 10)}.
+
+It raises two questions: why can't the weights stay where the math happens, and what can put those {count(perWeight - 2)} idle operations to work?
+
+Before answering either, start with the two operations a token actually uses. What is the chip doing with the weights it reads?
+
+<Route />

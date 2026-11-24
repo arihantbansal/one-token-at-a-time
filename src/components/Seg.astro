@@ -1,0 +1,33 @@
+---
+// Segmented buttons. A figure listens with `this.onSeg(name, fn)`.
+type Option = { value: string | number; label?: string };
+type Props = { name: string; label: string; options: Option[]; value: string | number };
+const { name, label, options, value } = Astro.props;
+---
+
+<div class="field">
+	<span class="field-label">{label}</span>
+	<div class="seg" role="group" aria-label={label} data-name={name}>
+		{
+			options.map((o) => (
+				<button type="button" data-value={String(o.value)} aria-pressed={String(o.value) === String(value)}>
+					{o.label ?? o.value}
+				</button>
+			))
+		}
+	</div>
+</div>
+
+<style>
+	.field {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+	}
+	.field-label {
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		color: var(--ink-2);
+	}
+</style>

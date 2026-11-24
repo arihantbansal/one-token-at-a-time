@@ -1,0 +1,191 @@
+---
+// An example routing of a batch, skewed like the contest's: each token picks 8 of the 256 experts. This GPU's 32 are drawn
+// in full with how many tokens chose each; the other GPUs' experts are shrunk to a strip.
+import { count } from "../lib/format";
+import { GPUS, LOCAL_EXPERTS } from "../lib/model";
+import { cellText, routing } from "../lib/routing";
+import Readout from "./Readout.astro";
+import Seg from "./Seg.astro";
+
+const FIRST = 1;
+const first = routing(FIRST);
+const mine = first.counts.slice(0, LOCAL_EXPERTS);
+const others = Array.from({ length: GPUS - 1 }, (_, g) =>
+	first.counts.slice(LOCAL_EXPERTS * (g + 1), LOCAL_EXPERTS * (g + 2)),
+);
+---
+
+<okc-router-grid class="figure-mono" data-local={LOCAL_EXPERTS}>
+	<div class="map">
+		<p class="tag">this GPU's {count(LOCAL_EXPERTS)} experts <span>example routing</span></p>
+		<div class="mine" role="img" aria-label={first.label}>
+			{mine.map((n) => <span class:list={["cell", { hit: n > 0 }]}>{cellText(n)}</span>)}
+		</div>
+		<p class="tag">the other {count(GPUS - 1)} GPUs, one square per expert</p>
+		<div class="others" aria-hidden="true">
+			{
+				others.map((gpu) => (
+					<div class="gpu">
+						{gpu.map((n) => (
+							<i class:list={{ hit: n > 0 }} />
+						))}
+					</div>
+				))
+			}
+		</div>
+		<p class="legend" aria-hidden="true">
+			<span><span class="cell hit sample">3</span> read in full; the number is how many tokens chose it</span>
+			<span><span class="cell sample">·</span> chosen by none, not read</span>
+		</p>
+	</div>
+	<div class="controls">
+		<Seg
+			name="tokens"
+			label="tokens in the pass"
+			value={String(FIRST)}
+			options={[{ value: 1 }, { value: 16 }, { value: 32 }, { value: 256 }]}
+		/>
+	</div>
+	<p class="visually-hidden" aria-live="polite" data-status></p>
+	<Readout
+		items={[
+			{ key: "used", label: "experts read on this GPU", tone: "bytes", value: first.used },
+			{ key: "pairs", label: "token-expert pairs here", tone: "math", value: first.pairs },
+			{ key: "read", label: "expert weights read", tone: "bytes", value: first.read },
+		]}
+	/>
+</okc-router-grid>
+
+<style>
+	.map {
+		display: grid;
+		gap: 0.5rem;
+		max-width: 26rem;
+		margin: 0 auto 1.25rem;
+	}
+	.tag {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 0 1rem;
+		margin: 0;
+		color: var(--ink);
+	}
+	.tag span {
+		color: var(--ink-2);
+	}
+	.mine {
+		display: grid;
+		grid-template-columns: repeat(8, minmax(0, 1fr));
+		gap: 3px;
+		margin-bottom: 0.75rem;
+	}
+	.cell {
+		display: grid;
+		place-items: center;
+		height: 2.125rem;
+		font-size: 0.75rem;
+		font-variant-numeric: tabular-nums;
+		line-height: 1;
+		color: var(--ink-2);
+		border: 1px solid var(--rule);
+	}
+	.cell.hit {
+		background: color-mix(in oklab, var(--bytes) 22%, var(--paper));
+		border: 1.5px solid var(--bytes);
+		color: var(--math-ink);
+	}
+	.others {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 0.625rem;
+		margin-bottom: 0.75rem;
+	}
+	.gpu {
+		display: grid;
+		grid-template-columns: repeat(8, 0.3125rem);
+		gap: 1px;
+	}
+	.gpu i {
+		aspect-ratio: 1;
+		background: var(--faint);
+	}
+	.gpu i.hit {
+		background: var(--bytes);
+	}
+	.legend {
+		display: grid;
+		gap: 0.375rem;
+		margin: 0;
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.legend > span {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.sample {
+		flex: none;
+		width: 1.75rem;
+		height: 1.5rem;
+	}
+	.controls {
+		justify-content: center;
+	}
+	@media (max-width: 30rem) {
+		.others {
+			justify-content: flex-start;
+		}
+	}
+</style>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+	import { cellText, routing } from "../lib/routing";
+
+	const STAGGER = 0.6;
+
+	class RouterGrid extends FigureElement {
+		private mine: HTMLElement[] = [];
+		private far: HTMLElement[] = [];
+		private counts: number[] = [];
+		private delays: number[] = [];
+
+		protected setup() {
+			this.mine = [...this.querySelectorAll<HTMLElement>(".mine .cell")];
+			this.far = [...this.querySelectorAll<HTMLElement>(".gpu i")];
+			const n = this.mine.length + this.far.length;
+			this.delays = Array.from({ length: n }, (_, i) => ((i * 97) % n) / n);
+			this.onSeg("tokens", (v) => this.show(Number(v)));
+		}
+
+		private show(tokens: number) {
+			const r = routing(tokens);
+			this.counts = r.counts;
+			this.out("used", r.used);
+			this.out("pairs", r.pairs);
+			this.out("read", r.read);
+			this.$(".mine").setAttribute("aria-label", r.label);
+			this.$("[data-status]").textContent = r.label;
+			this.tween(400, (p) => this.draw(p));
+		}
+
+		private draw(progress: number) {
+			const local = this.num("local");
+			const shown = (e: number) => (progress >= 1 || progress > this.delays[e] * STAGGER ? this.counts[e] : 0);
+			this.mine.forEach((cell, e) => {
+				const n = shown(e);
+				const text = cellText(n);
+				if (cell.textContent !== text) cell.textContent = text;
+				cell.classList.toggle("hit", n > 0);
+			});
+			this.far.forEach((cell, i) => {
+				cell.classList.toggle("hit", shown(local + i) > 0);
+			});
+		}
+	}
+
+	define("okc-router-grid", RouterGrid);
+</script>

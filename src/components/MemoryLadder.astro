@@ -1,0 +1,178 @@
+---
+// The H200's four kinds of memory from nearest the arithmetic to farthest: how much there is, who
+// can see it, and how long a request takes to come back (measured on a Hopper chip; NVIDIA
+// publishes no on-chip latencies). Registers have no measured figure: they are read in the same
+// instruction that uses them. Bandwidths are approximate whole-chip figures for Hopper, rounded.
+import { count } from "../lib/format";
+import { MEASURED_LATENCY_CYCLES as CYCLES, H200 } from "../lib/model";
+
+const kb = (n: number) => `${count(n / 2 ** 10)} KiB`;
+const mb = (n: number) => `${count(n / 2 ** 20)} MiB`;
+const RUNGS = [
+	{
+		name: "registers",
+		size: `${kb(H200.registerBytesPerSm)} in each block`,
+		total: mb(H200.sms * H200.registerBytesPerSm),
+		who: "one thread",
+		cycles: 0,
+		bandwidth: "on-chip",
+	},
+	{
+		name: "shared memory",
+		size: `${kb(H200.sharedBytesPerSm)} in each block`,
+		total: mb(H200.sms * H200.sharedBytesPerSm),
+		who: "one block's threads",
+		cycles: CYCLES.shared,
+		bandwidth: "~33 TB/s",
+	},
+	{
+		name: "L2",
+		size: mb(H200.l2Bytes),
+		total: "",
+		who: "every block",
+		cycles: CYCLES.l2,
+		bandwidth: "~7.9 TB/s",
+	},
+	{
+		name: "HBM",
+		size: `${H200.memoryGB} GB`,
+		total: "",
+		who: "every block",
+		cycles: CYCLES.hbm,
+		bandwidth: `${H200.bytesPerSecond / 1e12} TB/s`,
+	},
+];
+const longest = Math.max(...RUNGS.map((r) => r.cycles));
+---
+
+<div class="ladder">
+	<p class="head" aria-hidden="true">
+		<span>memory</span><span>size</span><span>seen by</span><span>bandwidth</span><span>wait for data, in clock cycles</span>
+	</p>
+	<ol>
+		{
+			RUNGS.map((r) => (
+				<li>
+					<span class="name">{r.name}</span>
+					<span class="size">
+						{r.size}
+						{r.total && <span class="total">{r.total} in all</span>}
+					</span>
+					<span class="who">
+						<span class="tag">seen by </span>
+						{r.who}
+					</span>
+					<span class="bw">
+						<span class="tag">bandwidth </span>
+						{r.bandwidth}
+					</span>
+					<span class="wait">
+						<span class="track" aria-hidden="true">
+							<i style={`--w: ${r.cycles / longest}`} />
+						</span>
+						<span class="c">{r.cycles ? `${count(r.cycles)} cycles` : "in the instruction"}</span>
+					</span>
+				</li>
+			))
+		}
+	</ol>
+	<p class="note">
+		KiB and MiB count in 1,024s. Waits and L2 throughput (~7.9 TB/s at 1.755 GHz) are measured on an H800, a Hopper chip like the H200 (<a
+			href="https://arxiv.org/abs/2402.13499">Luo et al., 2024</a
+		>); shared-memory bandwidth (~33 TB/s) extrapolates their 128 bytes/clock/SM measurement across 132 SMs at Hopper boost clocks. Capacities follow
+		<a href="https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/"
+			>NVIDIA's Hopper architecture overview</a
+		>, and HBM is the H200's rated bandwidth.
+	</p>
+</div>
+
+<style>
+	.ladder {
+		container-type: inline-size;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	ol {
+		display: grid;
+		gap: 0.75rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	li {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		grid-template-areas: "name who" "size bw" "wait wait";
+		gap: 0.25rem 1rem;
+		padding-top: 0.75rem;
+		border-top: 1px solid var(--rule);
+	}
+	.name {
+		grid-area: name;
+		color: var(--ink);
+	}
+	.size {
+		grid-area: size;
+		color: var(--ink);
+	}
+	.total {
+		display: block;
+		color: var(--ink-2);
+	}
+	.who {
+		grid-area: who;
+		text-align: right;
+	}
+	.bw {
+		grid-area: bw;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	.wait {
+		grid-area: wait;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 6.5rem;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.track {
+		height: 0.75rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	.track i {
+		display: block;
+		height: 100%;
+		width: calc(var(--w) * 100%);
+		background: var(--ink-2);
+	}
+	.c {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	.head {
+		display: none;
+	}
+	.note {
+		margin: 1rem 0 0;
+		font-size: 0.75rem;
+	}
+	@container (min-width: 40rem) {
+		.head,
+		li {
+			display: grid;
+			grid-template-columns: 8rem 11rem 7.5rem 6rem minmax(0, 1fr);
+			grid-template-areas: "name size who bw wait";
+			gap: 1rem;
+		}
+		.head {
+			margin: 0 0 0.5rem;
+		}
+		.who,
+		.bw {
+			text-align: left;
+		}
+		.tag {
+			display: none;
+		}
+	}
+</style>

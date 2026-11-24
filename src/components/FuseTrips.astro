@@ -1,0 +1,118 @@
+---
+// The gated output norm run as three kernels and as one, side by side: every list a kernel reads
+// from memory or writes back is one trip, drawn as a square.
+import { bytes, count } from "../lib/format";
+import {
+	type FuseKernel,
+	NORM_GATE_FUSED,
+	NORM_GATE_LIST_BYTES,
+	NORM_GATE_UNFUSED,
+	trips,
+} from "../lib/kernels";
+
+const CASES: { title: string; kernels: FuseKernel[] }[] = [
+	{ title: "three kernels", kernels: NORM_GATE_UNFUSED },
+	{ title: "one fused kernel", kernels: NORM_GATE_FUSED },
+];
+---
+
+<div class="fuse">
+	{
+		CASES.map((c) => (
+			<section>
+				<h3>{c.title}</h3>
+				<ol>
+					{c.kernels.map((k) => (
+						<li>
+							<p class="trip">
+								{k.reads.map((r) => (
+									<span>
+										<b aria-hidden="true">■</b> read {r}
+									</span>
+								))}
+							</p>
+							<p class="op">
+								<span class="obj-op" aria-hidden="true" /> {k.name}
+							</p>
+							<p class="trip">
+								{k.writes.map((w) => (
+									<span>
+										<b aria-hidden="true">■</b> write {w}
+									</span>
+								))}
+							</p>
+						</li>
+					))}
+				</ol>
+				<p class="sum">
+					{count(c.kernels.length)} {c.kernels.length === 1 ? "launch" : "launches"}, {count(trips(c.kernels))} trips:{" "}
+					{bytes(trips(c.kernels) * NORM_GATE_LIST_BYTES)}
+				</p>
+			</section>
+		))
+	}
+</div>
+
+<style>
+	.fuse {
+		display: grid;
+		gap: 1.5rem;
+		max-width: 38rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	@media (min-width: 40rem) {
+		.fuse {
+			grid-template-columns: 1fr 1fr;
+			gap: 2rem;
+		}
+	}
+	section {
+		display: grid;
+		grid-template-rows: auto 1fr auto;
+	}
+	h3 {
+		margin: 0 0 0.75rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	ol {
+		display: grid;
+		align-content: start;
+		gap: 0.5rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	li {
+		display: grid;
+		gap: 0.25rem;
+		padding: 0.5rem 0.75rem;
+		border: 1px solid var(--rule);
+		background: var(--paper);
+	}
+	p {
+		margin: 0;
+	}
+	.trip {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 1rem;
+		color: var(--bytes-ink);
+	}
+	.trip b {
+		font-weight: inherit;
+		color: var(--bytes);
+	}
+	.op {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--ink);
+	}
+	.sum {
+		margin-top: 0.75rem;
+		color: var(--ink);
+	}
+</style>

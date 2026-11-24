@@ -1,0 +1,115 @@
+---
+// Group the query heads that read the same keys and values, then split each group's context.
+import { bytes, count, decimal } from "../lib/format";
+import { attentionGroupGrid, GQA_SPLITS, KV_GROUP } from "../lib/kernels";
+import { CONTEXT_TOKENS, H200, HEAD_DIM, KV_HEADS, Q_HEADS } from "../lib/model";
+import BlockGrid from "./BlockGrid.astro";
+
+const whole = attentionGroupGrid(1);
+const split = attentionGroupGrid(GQA_SPLITS);
+const megabytes = (n: number) => `${decimal(n / 1e6)} MB`;
+const FRAMES = [
+	{
+		title: `one program per KV head (${KV_GROUP} query heads together)`,
+		slices: 1,
+		said: `Each program reads ${megabytes(whole.bytesPerProgram)} of keys and values for ${count(CONTEXT_TOKENS)} tokens.`,
+		busy: whole.programs,
+	},
+	{
+		title: `each KV head cut into ${GQA_SPLITS} slices`,
+		slices: GQA_SPLITS,
+		said: `${KV_HEADS} × ${GQA_SPLITS} = ${count(split.programs)} programs, each reading ${bytes(split.bytesPerProgram)} for ${count(split.sliceTokens)} tokens once for all ${KV_GROUP} query heads, keeping the KV cache payload at ${megabytes(split.totalBytes)} (plus small query and merge traffic).`,
+		busy: split.programs,
+	},
+];
+---
+
+<div class="split">
+	{
+		FRAMES.map((f) => (
+			<section>
+				<h3>{f.title}</h3>
+				<div class="heads" aria-hidden="true">
+					{Array.from({ length: KV_HEADS }, () => (
+						<span class="head" style={`--slices: ${f.slices}`}>
+							{Array.from({ length: f.slices }, () => (
+								<i class="obj-cache" />
+							))}
+						</span>
+					))}
+				</div>
+				<p>{f.said}</p>
+				<BlockGrid busy={f.busy} label={`${count(f.busy)} of ${count(H200.sms)} compute blocks busy`} />
+			</section>
+		))
+	}
+	<section>
+		<h3>a second, small kernel puts each head back together</h3>
+		<div class="merge" aria-hidden="true">
+			<span class="parts">
+				{Array.from({ length: GQA_SPLITS }, () => <i class="obj-work" />)}
+			</span>
+			<span class="arrow">→</span>
+			<i class="obj-work one" />
+		</div>
+		<p>
+			One program per query head combines its {GQA_SPLITS} partial results into one, for {Q_HEADS}
+			{" "}programs on this GPU, each reading {count(GQA_SPLITS * (HEAD_DIM + 1))} numbers.
+		</p>
+	</section>
+</div>
+
+<style>
+	.split {
+		display: grid;
+		gap: 2rem;
+		max-width: 34rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	section {
+		display: grid;
+		gap: 0.625rem;
+	}
+	h3 {
+		margin: 0;
+		font: inherit;
+		color: var(--ink);
+	}
+	p {
+		margin: 0;
+	}
+	.heads {
+		display: grid;
+		gap: 0.25rem;
+	}
+	.head {
+		display: grid;
+		grid-template-columns: repeat(var(--slices), minmax(0, 1fr));
+		gap: 1px;
+		padding: 1px;
+		background: var(--rule);
+	}
+	.head i {
+		--obj: 0.625rem;
+		min-width: 0;
+		border: 0;
+	}
+	.merge {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.parts {
+		display: grid;
+		grid-template-columns: repeat(16, auto);
+		gap: 2px;
+	}
+	.parts i {
+		--obj: 0.4375rem;
+	}
+	.one {
+		--obj: 1.25rem;
+	}
+</style>

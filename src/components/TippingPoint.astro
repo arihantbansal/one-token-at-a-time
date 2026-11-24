@@ -1,0 +1,440 @@
+---
+// When does a projection stop waiting for memory? Slide the token count and compare the two times
+// for the layer's largest projection (the pooler). The scale is linear from zero and fixed: its
+// full width is the moving-data time at the most tokens shown, and longer arithmetic runs off it.
+import { bytes, count, decimal, times, us } from "../lib/format";
+import {
+	BALANCE_POINT,
+	FP32_BALANCE_POINT,
+	fp32MathUs,
+	getProjection,
+	H200,
+	mathUs,
+	memoryUs,
+	projectionCost,
+	weightBytes,
+} from "../lib/model";
+import Readout from "./Readout.astro";
+
+const projection = getProjection("pooler");
+const tensorRidge = Math.round(BALANCE_POINT);
+const cudaRidge = Math.round(FP32_BALANCE_POINT);
+const TOKENS = [...new Set([1, 2, 4, 8, cudaRidge, 16, 32, 64, 128, tensorRidge, 256, 512])].sort(
+	(a, b) => a - b,
+);
+const NARROW = new Set([1, cudaRidge, 64, tensorRidge, 512]);
+const MODES = [
+	{ cores: "tensor cores", precision: "bf16", peak: H200.flopsPerSecond, arithmeticUs: mathUs },
+	{ cores: "CUDA cores", precision: "fp32", peak: H200.fp32FlopsPerSecond, arithmeticUs: fp32MathUs },
+];
+const tensorAdvantage = times(H200.flopsPerSecond / H200.fp32FlopsPerSecond, 0);
+const BADGES = { memory: "memory bound", ridge: "at the ridge", compute: "compute bound" };
+// The marked ridges use weight reads alone. Allow for the few extra bytes of working numbers.
+const EVEN = 1.1;
+
+const operations = (n: number) => {
+	const [size, word] = n >= 1e12 ? [1e12, "trillion"] : n >= 1e9 ? [1e9, "billion"] : [1e6, "million"];
+	const v = n / size;
+	return `${v.toLocaleString("en-US", { maximumFractionDigits: v < 10 ? 1 : 0 })} ${word}`;
+};
+
+const raw = TOKENS.map((tokens) => {
+	const cost = projectionCost(projection, tokens);
+	return { tokens, cost, memory: memoryUs(cost.bytes) };
+});
+
+const full = Math.max(...raw.map((s) => s.memory));
+const at = (t: number) => Math.min(1, t / full);
+const MARK_STEP = 5;
+const MARKS = Array.from({ length: Math.floor(full / MARK_STEP) + 1 }, (_, i) => i * MARK_STEP);
+const mark = (t: number) => (t === 0 ? "0" : `${count(t)} µs`);
+
+const STATES = MODES.map(({ cores, precision, arithmeticUs }) =>
+	raw.map(({ tokens, cost, memory }) => {
+		const math = arithmeticUs(cost.flops);
+		const ratio = Math.max(memory, math) / Math.min(memory, math);
+		const regime = ratio < EVEN ? "ridge" : math > memory ? "compute" : "memory";
+		const badge = BADGES[regime];
+		const hardware = `${precision.toUpperCase()} ${cores}`;
+		const batch = `${count(tokens)} ${tokens === 1 ? "token" : "tokens"}`;
+		const longer = math > memory ? "arithmetic" : "moving data";
+		const shorter = math > memory ? "moving data" : "arithmetic";
+		const multiple = decimal(ratio, ratio < 10 ? 1 : 0);
+		const showDot = precision === "fp32" && regime === "compute" && tokens < tensorRidge;
+		const verdict =
+			regime === "ridge"
+				? `At ${batch} on ${hardware}, moving data and arithmetic take nearly the same time.`
+				: `At ${batch} on ${hardware}, ${longer} sets the time because it takes about ${multiple} times as long as ${shorter}.`;
+		return {
+			regime,
+			badge,
+			verdict,
+			showDot,
+			batch,
+			state: {
+				tokens: count(tokens),
+				unit: tokens === 1 ? "token at once" : "tokens at once",
+				memoryAt: at(memory),
+				mathAt: at(math),
+				memory: us(memory),
+				math: us(math),
+				mathOver: math > full,
+				weights: bytes(weightBytes(projection, tokens)),
+				ops: operations(cost.flops),
+				valuetext: `${batch} on ${hardware}, moving data ${us(memory)}, arithmetic ${us(math)}, ${badge}`,
+			},
+		};
+	}),
+);
+const first = STATES[0][0].state;
+const dynamic = STATES.map((mode) => mode.map(({ state }) => state));
+---
+
+<okc-tipping-point data-states={JSON.stringify(dynamic)}>
+	<div class="seg" role="group" aria-label="Arithmetic hardware" data-name="units">
+		{
+			MODES.map(({ cores, precision, peak }, i) => (
+				<button type="button" data-value={i} aria-pressed={i === 0}>
+					{cores.toLowerCase()} <span>({precision} · {count(peak / 1e12)} tflops)</span>
+				</button>
+			))
+		}
+	</div>
+	<div class="slider">
+		<div class="count">
+			<output aria-live="off" data-tokens>{first.tokens}</output> <span data-unit>{first.unit}</span>
+		</div>
+		<input
+			type="range"
+			min="0"
+			max={TOKENS.length - 1}
+			step="1"
+			value="0"
+			aria-label="Tokens at once"
+			aria-valuetext={first.valuetext}
+			data-slider
+		/>
+		<div class="ticks">
+			{
+				TOKENS.map((n, i) => (
+					<button
+						type="button"
+						class={NARROW.has(n) ? "" : "wide-only"}
+						style={`--at: ${i / (TOKENS.length - 1)}`}
+						data-mark={i}
+						aria-label={`${count(n)} ${n === 1 ? "token" : "tokens"}`}
+					>
+						{count(n)}
+					</button>
+				))
+			}
+		</div>
+	</div>
+
+	<div class="plot">
+		<div class="bar bytes">
+			<span class="what"><span aria-hidden="true">■ </span>moving data</span>
+			<b data-out="memory">{first.memory}</b>
+			<div class="track" aria-hidden="true">
+				{MARKS.slice(1).map((t) => <span class="grid" style={`--at: ${at(t)}`} />)}
+				<i data-bar="memory" style={`--w: ${first.memoryAt}`}></i>
+			</div>
+		</div>
+		<div class="bar math" data-over={first.mathOver ? "" : undefined}>
+			<span class="what"><span aria-hidden="true">● </span>arithmetic</span>
+			<b data-out="math">{first.math}</b>
+			<div class="track" aria-hidden="true">
+				{MARKS.slice(1).map((t) => <span class="grid" style={`--at: ${at(t)}`} />)}
+				<i data-bar="math" style={`--w: ${first.mathAt}`}></i>
+			</div>
+		</div>
+		<div class="axis" aria-hidden="true">
+			{MARKS.map((t) => <span style={`--at: ${at(t)}`}>{mark(t)}</span>)}
+		</div>
+	</div>
+
+	<div class="verdicts" aria-live="polite" aria-atomic="true">
+		{
+			STATES.flat().map(({ regime, badge, verdict, showDot, batch }, i) => (
+				<div data-regime={regime} hidden={i !== 0}>
+					<span class="badge">{badge}</span>
+					<p>
+						{showDot ? (
+							<>
+								At {batch}, FP32 CUDA cores have passed the {cudaRidge}-token ridge, and a batched{" "}
+								<code>tl.dot</code> can use tensor cores at about {tensorAdvantage} the peak arithmetic rate.
+							</>
+						) : verdict}
+					</p>
+				</div>
+			))
+		}
+	</div>
+
+	<Readout
+		items={[
+			{ key: "weights", label: "weights read", tone: "bytes", value: first.weights },
+			{ key: "ops", label: "arithmetic operations", tone: "math", value: first.ops },
+		]}
+	/>
+</okc-tipping-point>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+
+	type State = {
+		tokens: string;
+		unit: string;
+		memoryAt: number;
+		mathAt: number;
+		memory: string;
+		math: string;
+		mathOver: boolean;
+		weights: string;
+		ops: string;
+		valuetext: string;
+	};
+
+	class TippingPoint extends FigureElement {
+		setup() {
+			const slider = this.$<HTMLInputElement>("[data-slider]");
+			const states: State[][] = JSON.parse(this.dataset.states ?? "[]");
+			const verdicts = [...this.querySelectorAll<HTMLElement>("[data-regime]")];
+			let visible = this.$("[data-regime]:not([hidden])");
+			let mode = Number(this.$('.seg button[aria-pressed="true"]').dataset.value);
+			const choose = (index: number) => {
+				const s = states[mode][index];
+				slider.value = String(index);
+				slider.setAttribute("aria-valuetext", s.valuetext);
+				this.$("[data-tokens]").textContent = s.tokens;
+				this.$("[data-unit]").textContent = s.unit;
+				this.$<HTMLElement>('[data-bar="memory"]').style.setProperty("--w", String(s.memoryAt));
+				this.$<HTMLElement>('[data-bar="math"]').style.setProperty("--w", String(s.mathAt));
+				this.out("memory", s.memory);
+				this.out("math", s.math);
+				this.$(".bar.math").toggleAttribute("data-over", s.mathOver);
+				this.out("weights", s.weights);
+				this.out("ops", s.ops);
+				const verdict = verdicts[mode * states[mode].length + index];
+				if (verdict !== visible) {
+					visible.hidden = true;
+					verdict.hidden = false;
+					visible = verdict;
+				}
+			};
+
+			this.onSeg("units", (value) => {
+				mode = Number(value);
+				choose(Number(slider.value));
+			});
+			this.on(slider, "input", () => choose(Number(slider.value)));
+			for (const b of this.querySelectorAll<HTMLButtonElement>("[data-mark]")) {
+				this.on(b, "click", () => choose(Number(b.dataset.mark)));
+			}
+		}
+	}
+
+	define("okc-tipping-point", TippingPoint);
+</script>
+
+<style>
+	okc-tipping-point {
+		display: block;
+	}
+	.seg {
+		display: inline-grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		margin-bottom: 1rem;
+		font: 0.8125rem/1.4 var(--mono);
+	}
+	.seg button {
+		padding-inline: 0.45rem;
+	}
+	.seg span {
+		display: inline-block;
+	}
+	.count {
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+		color: var(--ink-2);
+	}
+	output {
+		font-size: 2rem;
+		line-height: 1.2;
+		color: var(--ink);
+		font-variant-numeric: tabular-nums;
+	}
+	input[type="range"] {
+		display: block;
+		width: 100%;
+		margin: 0;
+	}
+	.ticks {
+		position: relative;
+		height: 2.25rem;
+		margin: 0 8px;
+	}
+	.ticks button {
+		position: absolute;
+		left: calc(var(--at) * 100%);
+		transform: translateX(-50%);
+		min-width: 1.6rem;
+		height: 2.25rem;
+		padding: 0;
+		border: 0;
+		background: none;
+		font: 0.75rem var(--mono);
+		color: var(--ink-2);
+		white-space: nowrap;
+		cursor: pointer;
+		transition: color var(--fast) var(--ease);
+	}
+	.ticks button:first-child {
+		transform: translateX(-0.4rem);
+		text-align: left;
+	}
+	.ticks button:last-child {
+		transform: translateX(calc(-100% + 0.4rem));
+		text-align: right;
+	}
+	.ticks button:hover {
+		color: var(--ink);
+	}
+	.ticks .wide-only {
+		display: none;
+	}
+	@media (min-width: 40rem) {
+		.ticks button {
+			min-width: 2.25rem;
+		}
+		.ticks .wide-only {
+			display: block;
+		}
+	}
+	.plot {
+		display: grid;
+		gap: 1rem;
+		margin-top: 1.25rem;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+	}
+	.bar {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 0.35rem 1rem;
+	}
+	.bytes .what {
+		color: var(--bytes-ink);
+	}
+	.math .what {
+		color: var(--math-ink);
+	}
+	.bar b {
+		font-weight: 400;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+	/* The track stops short of the edge to leave room for the off-the-scale mark. */
+	.track,
+	.axis {
+		width: calc(100% - 1rem);
+	}
+	.track {
+		position: relative;
+		grid-column: 1 / -1;
+		height: 1.25rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	.track::after {
+		content: "▸";
+		position: absolute;
+		top: 50%;
+		left: 100%;
+		padding-left: 0.2rem;
+		transform: translateY(-50%);
+		color: var(--math-ink);
+		opacity: 0;
+		transition: opacity var(--fast) var(--ease);
+	}
+	[data-over] .track::after {
+		opacity: 1;
+	}
+	.grid {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: calc(var(--at) * 100%);
+		border-left: 1px dashed var(--rule);
+	}
+	.bar i {
+		position: relative;
+		display: block;
+		height: 100%;
+		width: max(2px, calc(var(--w) * 100%));
+		background: var(--bytes);
+		transition: width 320ms var(--ease);
+	}
+	.bar.math i {
+		background: var(--math);
+	}
+	.axis {
+		position: relative;
+		height: 1.25rem;
+		margin-top: -0.5rem;
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.axis span {
+		position: absolute;
+		left: calc(var(--at) * 100%);
+		transform: translateX(-50%);
+		white-space: nowrap;
+	}
+	.verdicts {
+		display: grid;
+		margin: 1.5rem 0 0.5rem;
+		font: 1rem/1.45 var(--serif);
+	}
+	/* Every verdict keeps its place in the same cell, so the tallest sets the height. */
+	.verdicts > div {
+		grid-area: 1 / 1;
+		padding: 0.625rem 0.75rem;
+		border: 1px solid var(--rule);
+		border-left: 3px solid var(--ink);
+		border-radius: 2px;
+		background: var(--paper-2);
+	}
+	/* Hidden verdicts must also disappear immediately under the global reduced-motion styles. */
+	.verdicts > div,
+	.verdicts > div * {
+		transition-property: none;
+	}
+	.verdicts > div[hidden] {
+		display: block;
+		visibility: hidden;
+	}
+	.verdicts [data-regime="memory"] {
+		border-left-color: var(--bytes);
+	}
+	.verdicts [data-regime="compute"] {
+		border-left-color: var(--math);
+	}
+	.badge {
+		display: inline-block;
+		padding: 0.125rem 0.45rem;
+		border: 1px solid currentColor;
+		border-radius: 1rem;
+		font: 0.6875rem/1.4 var(--mono);
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+	[data-regime="memory"] .badge {
+		color: var(--bytes-ink);
+	}
+	[data-regime="compute"] .badge {
+		color: var(--math-ink);
+	}
+	.verdicts p {
+		margin: 0.35rem 0 0;
+	}
+</style>

@@ -1,0 +1,125 @@
+---
+// One pass for one token, top to bottom: the lookup, every layer in order, and a score for each
+// possible next token. The layer row is the whole the layer map zooms into.
+import { count } from "../lib/format";
+import { HIDDEN, LAYERS } from "../lib/model";
+import { REPLY } from "../lib/tokenLoop";
+
+const layers = Array.from({ length: LAYERS.total }, (_, i) => i);
+// Made-up scores for twenty of the possible next tokens; the tallest is the one picked.
+const scores = [3, 5, 2, 7, 4, 2, 6, 3, 2, 18, 4, 3, 5, 2, 8, 3, 2, 4, 6, 3];
+const best = Math.max(...scores);
+const top = scores.indexOf(best);
+const [input, picked] = REPLY.map((t) => t.trim());
+---
+
+<ol class="path" aria-label={`One pass: the token ${input} is looked up as ${count(HIDDEN)} numbers, runs through ${LAYERS.total} layers in order, and comes out as a score for every possible next token. The top score, ${picked}, is picked.`}>
+	<li>
+		<span class="tok">{input}</span>
+		<span class="note">this pass's input token</span>
+	</li>
+	<li class="down">its ID picks a row of the lookup table</li>
+	<li>
+		<span class="work" aria-hidden="true">
+			{Array.from({ length: 6 }, () => <i class="obj-work" />)}
+			<b>…</b>
+			<i class="obj-work" />
+		</span>
+		<span class="note">{count(HIDDEN)} working numbers</span>
+	</li>
+	<li class="down">run every layer in order</li>
+	<li>
+		<span class="layers" aria-hidden="true">
+			{layers.map(() => <i />)}
+		</span>
+		<span class="note">{LAYERS.total} layers, each adding to the list</span>
+	</li>
+	<li class="down">score every possible next token</li>
+	<li>
+		<span class="scores" aria-hidden="true">
+			{scores.map((s, i) => <i class:list={{ top: i === top }} style={`--h: ${s / best}`} />)}
+			<b>…</b>
+		</span>
+		<span class="note">one score per token in the vocabulary</span>
+	</li>
+	<li class="down">pick one: the top score, or a weighted draw</li>
+	<li>
+		<span class="tok out">{picked}</span>
+		<span class="note">input to the next pass</span>
+	</li>
+</ol>
+
+<style>
+	.path {
+		display: grid;
+		gap: 0.25rem;
+		width: min(100%, 22rem);
+		margin: 0 auto;
+		padding: 0;
+		list-style: none;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	li {
+		display: grid;
+		gap: 0.25rem;
+		justify-items: start;
+	}
+	.down {
+		padding: 0.125rem 0 0.125rem 1rem;
+		border-left: 1px solid var(--ink-2);
+		margin-left: 0.75rem;
+	}
+	.tok {
+		display: inline-grid;
+		place-items: center;
+		height: 1.75rem;
+		padding: 0 0.5rem;
+		border: 1.25px solid var(--ink);
+		color: var(--ink);
+	}
+	.tok.out {
+		border-width: 2px;
+	}
+	.note {
+		font-size: 0.75rem;
+	}
+	.work {
+		display: flex;
+		align-items: center;
+		gap: 3px;
+		--obj: 1.125rem;
+	}
+	.work i {
+		min-width: var(--obj);
+	}
+	b {
+		font-weight: inherit;
+		padding: 0 0.25rem;
+		color: var(--ink);
+	}
+	.layers {
+		display: flex;
+		gap: 1px;
+		width: 100%;
+		height: 1.5rem;
+	}
+	.layers i {
+		flex: 1;
+		background: var(--rule);
+	}
+	.scores {
+		display: flex;
+		align-items: flex-end;
+		gap: 3px;
+		height: 2.5rem;
+	}
+	.scores i {
+		width: 0.5rem;
+		height: calc(var(--h) * 100%);
+		background: var(--rule);
+	}
+	.scores i.top {
+		background: var(--ink);
+	}
+</style>

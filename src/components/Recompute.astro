@@ -1,0 +1,111 @@
+---
+// The waste a cache removes, as a filmstrip: if a pass kept nothing from earlier passes, the pass
+// for each token would run every token so far through the model again.
+import { count } from "../lib/format";
+import { WORDS } from "../lib/riverBank";
+
+const frames = WORDS.map((word, i) => ({ word, n: i + 1 }));
+const total = frames.reduce((sum, f) => sum + f.n, 0);
+---
+
+<div class="redo" style={`--cols: ${WORDS.length}`}>
+	<p class="legend">
+		<span><span class="obj-work mini new" aria-hidden="true"></span> the pass's own token</span>
+		<span><span class="obj-work mini" aria-hidden="true"></span> an earlier token, worked out again</span>
+	</p>
+	<ol>
+		{
+			frames.map((f) => (
+				<li>
+					<p class="label">pass for "{f.word}"</p>
+					<div
+						class="row"
+						role="img"
+						aria-label={`The pass for "${f.word}" runs ${f.n} ${f.n === 1 ? "token" : "tokens"} through the model: ${WORDS.slice(0, f.n).join(", ")}`}
+					>
+						<span class="tokens">
+							{WORDS.slice(0, f.n).map((w, i) => (
+								<span class:list={["obj-work", "token", { new: i === f.n - 1 }]}>{w}</span>
+							))}
+						</span>
+						<span class="n">{count(f.n)}</span>
+					</div>
+				</li>
+			))
+		}
+	</ol>
+	<p class="tally">
+		<span>tokens run through the model</span>
+		<span class="n">{count(total)}</span>
+	</p>
+</div>
+
+<style>
+	.redo {
+		max-width: 30rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem 1.25rem;
+		margin-bottom: 1.25rem;
+		font-size: 0.75rem;
+	}
+	.legend > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.mini {
+		--obj: 0.875rem;
+		min-width: 0.875rem;
+	}
+	ol {
+		display: grid;
+		gap: 0.625rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.label {
+		margin-bottom: 0.25rem;
+		font-size: 0.75rem;
+	}
+	.row,
+	.tally {
+		display: grid;
+		grid-template-columns: 1fr 2.5rem;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.tokens {
+		display: grid;
+		grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+		gap: 3px;
+	}
+	.token {
+		--obj: 1.75rem;
+		min-width: 0;
+		width: 100%;
+		overflow: hidden;
+	}
+	.new {
+		border-width: 2px;
+	}
+	.n {
+		text-align: right;
+		color: var(--ink);
+		font-variant-numeric: tabular-nums;
+	}
+	.tally {
+		margin-top: 1rem;
+		padding-top: 0.625rem;
+		border-top: 1px solid var(--ink-2);
+	}
+</style>

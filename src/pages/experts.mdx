@@ -1,0 +1,125 @@
+---
+layout: ../layouts/Stop.astro
+slug: experts
+description: How a mixture-of-experts model reads only the few experts a router picks for each token, and how attention and the experts fit together in one whole layer.
+---
+
+import ActiveWeights from "../components/ActiveWeights.astro";
+import Deeper from "../components/Deeper.astro";
+import Figure from "../components/Figure.astro";
+import InTheChallenge from "../components/InTheChallenge.astro";
+import LayerPath from "../components/LayerPath.astro";
+import Predict from "../components/Predict.astro";
+import RouteOneToken from "../components/RouteOneToken.astro";
+import Term from "../components/Term.astro";
+import { passBytesPerGpu } from "../lib/challenge";
+import { KEEP, MIX } from "../lib/runningTotal";
+import { count, percent, worked } from "../lib/format";
+import {
+	ACTIVE_WEIGHTS,
+	D_EXPERT,
+	EXPERT_WEIGHTS,
+	GPUS,
+	getProjection,
+	HIDDEN,
+	KV_HEADS,
+	LAYERS,
+	LOCAL_EXPERTS,
+	MOE_PROBLEM_LAYERS,
+	N_EXPERTS,
+	NVFP4_BLOCK,
+	NVFP4_BYTES,
+	Q_HEADS,
+	ROUTER_SCALE,
+	SLICED_MAX_TOKENS,
+	TOP_K,
+	TOTAL_WEIGHTS,
+} from "../lib/model";
+
+export const billions = (n) => count(Math.round(n / 1e9));
+export const bits = getProjection("pooler").bytesPerWeight * 8;
+export const experts = N_EXPERTS * EXPERT_WEIGHTS * LAYERS.total;
+export const outside = Math.round(TOTAL_WEIGHTS / 1e9) * 1e9 - Math.round(experts / 1e9) * 1e9;
+export const allHeads = Q_HEADS * GPUS;
+export const skippedAll = Math.round((1 - ACTIVE_WEIGHTS / TOTAL_WEIGHTS) * 100);
+export const skippedExperts = Math.round((1 - TOP_K / N_EXPERTS) * 100);
+
+Almost all of Muse Spark Open's {billions(TOTAL_WEIGHTS)} billion weights live inside one stage of each layer, and any token skips about {skippedAll}% of all weights (and {skippedExperts}% of the expert weights). Right after attention mixes in context from earlier tokens, each layer runs a second stage that works on the token's own numbers, using a crowd of small networks of which only a handful run for any token.
+
+## A few experts per token
+
+Each layer holds {count(N_EXPERTS)} of these small networks, each called an <Term id="expert">expert</Term>. One expert is three tables of {count(D_EXPERT)} × {count(D_EXPERT)} weights, about {count(EXPERT_WEIGHTS / 1e6)} million in total. A token passes through {TOP_K} of the {count(N_EXPERTS)} experts in every layer. That design is a <Term id="moe">mixture of experts</Term> (MoE).
+
+Which {TOP_K} run? A <Term id="router">router</Term> decides. The router is one small projection that turns the token's {count(HIDDEN)} working numbers into {count(N_EXPERTS)} scores, one per expert. The {TOP_K} highest scores win, only those experts run, and their {TOP_K} outputs are blended together using their normalized scores.
+
+<Figure surface="paper" label="routing one token">
+	<RouteOneToken />
+</Figure>
+
+{count(N_EXPERTS - TOP_K)} of the {count(N_EXPERTS)} experts did nothing for this token, and their weights were never read. The scores here are illustrative, while the counts are the model's. The next layer's router makes its own choice from scratch.
+
+## Nobody assigns the experts
+
+The name suggests a panel of human-assigned specialists, one for Python and another for French. Instead, the router and experts are trained together, so each expert handles whatever patterns the router learns to send it. Training also keeps the router from sending everything to a few favorites, since an expert that rarely wins is wasted memory.
+
+When researchers look inside trained MoE models, experts tend to settle on kinds of tokens (punctuation, common syntax, proper nouns) more than broad subjects. <a href="https://huggingface.co/blog/moe">Hugging Face's mixture-of-experts explainer</a> covers those findings and how routers stay balanced during training.
+
+<Deeper title="How the router scores, and what happens inside an expert">
+	<p>
+		The router multiplies its {count(N_EXPERTS)} outputs by {worked(ROUTER_SCALE)} and applies a sigmoid (squeezing values into 0 to 1). To even out traffic without distorting training gradients, Muse Spark Open adds a fixed bias per expert only during selection, the auxiliary-loss-free balancing method described in the <a href="https://arxiv.org/abs/2412.19437">DeepSeek-V3 technical report</a>. The adjusted scores pick the top {TOP_K}, and the unadjusted scores of those {TOP_K} (rescaled to sum to 1) weight the blend.
+	</p>
+	<p>
+		A projection first narrows the token's {count(HIDDEN)} numbers to {count(D_EXPERT)}, and another widens the blended result back to {count(HIDDEN)} afterward. Inside each expert, two tables run in parallel in a SwiGLU block: one output passes through a smooth curve that shrinks negative values toward zero and multiplies the other element by element, acting as a gate. The third table turns that product back into {count(D_EXPERT)} numbers, and each expert's output is rescaled before blending.
+	</p>
+</Deeper>
+
+## The weights a token reads
+
+Picking {TOP_K} of {count(N_EXPERTS)} means a token activates {percent(TOP_K / N_EXPERTS)} of each layer's experts. The experts hold roughly {billions(experts)} billion of the model's {billions(TOTAL_WEIGHTS)} billion weights; the other {billions(outside)} billion sit in attention, the router, and the projections every token runs.
+
+Drawn to scale, one square per billion weights, the model splits in two.
+
+<Figure surface="paper" label="the weights one token reads">
+	<ActiveWeights />
+</Figure>
+
+Almost every square outside the experts is read on every pass. Inside the experts, only about one square in {count(N_EXPERTS / TOP_K)} lights up, scattered because each layer's router picks independently. Memory must hold all {billions(TOTAL_WEIGHTS)} billion weights, while a pass's read time follows the {billions(ACTIVE_WEIGHTS)} billion it actually fetches.
+
+Why not train a dense model of {billions(ACTIVE_WEIGHTS)} billion weights instead? Extra parameters give training more room to store learned patterns, even though a sparse model does not match a dense model of the same total size. A mixture of experts trades memory footprint for larger model capacity while keeping per-token weight reads near a {billions(ACTIVE_WEIGHTS)}-billion-weight model.
+
+<Predict question={`Imagine doubling the number of experts in each layer while each token still picks ${TOP_K}. What happens to the weights one token reads, and to the memory needed to hold the model?`}>
+	<p>
+		The active weights one token reads stay near {billions(ACTIVE_WEIGHTS)} billion: still {TOP_K} experts per layer plus the shared projections. Total memory nearly doubles, from {billions(TOTAL_WEIGHTS)} billion weights to about {billions(2 * experts + outside)} billion, because experts make up nearly all of the model.
+	</p>
+	<p>
+		In the ideal bandwidth floor, adding experts buys extra parameters with memory rather than per-token read time, though routing and communication can still shift in practice.
+	</p>
+</Predict>
+
+Muse Spark Open also shrinks its expert weights with <Term id="quantization">quantization</Term>. Instead of a <Term id="bf16">16-bit</Term> float, each expert weight is stored as a 4-bit code, scaled back up by a shared 8-bit multiplier per block of {NVFP4_BLOCK} weights (plus one scale for the whole expert). That averages {worked(NVFP4_BYTES * 8)} bits per weight instead of {bits}, cutting expert bytes by nearly {worked(bits / (NVFP4_BYTES * 8))}×. The format is NVIDIA's <Term id="nvfp4">NVFP4</Term>; before multiplying with an expert, the kernel unpacks each 4-bit code and applies its scales.
+
+<InTheChallenge problem="muse_moe_w4a16">
+	<p>
+		This problem timed the experts stage on one GPU: running whichever of that GPU's {LOCAL_EXPERTS} local experts were chosen in a pass. (The standalone <code>muse_moe_w4a16</code> board weights {MOE_PROBLEM_LAYERS} layers, while the full-layer decoder board sums all {LAYERS.total}.) The <a href="/challenge">appendix</a> maps how it connects to the rest of a pass.
+	</p>
+</InTheChallenge>
+
+## One whole layer
+
+Put attention and the experts together on our four working numbers, checking which kind of data each step touches: working numbers, the cache, or weights.
+
+<Figure surface="paper" label="one token through one layer">
+	<LayerPath />
+</Figure>
+
+Attention read the conversation's cache and appended one entry. The experts read only the chosen experts' weights (two of eight here standing in for {TOP_K} of {count(N_EXPERTS)}). The running total updated twice, rescaling a copy first and folding the new result back in (Muse Spark Open blends at learned multipliers like {worked(KEEP)} old to {worked(MIX)} new). Between those stages sit about a dozen small steps, such as rescaling vectors, picking top-{TOP_K} scores, and writing to the cache. [Appendix A](/challenge#layer-map) lays out the full interactive layer map step by step.
+
+## Split across eight GPUs
+
+That completes a pass: a lookup, {LAYERS.total} layers, and a final score for every vocabulary token. Because {billions(TOTAL_WEIGHTS)} billion weights will not fit on one GPU, the server spreads every layer across {GPUS} H200s in two ways:
+- Attention is split by heads: each GPU holds {Q_HEADS} of the {allHeads} query heads and {KV_HEADS} of the {KV_HEADS * GPUS} key-value heads (<Term id="tensorParallel">tensor parallelism</Term>).
+- Experts are split whole: each GPU holds {LOCAL_EXPERTS} of each layer's {count(N_EXPERTS)} experts (<Term id="expertParallel">expert parallelism</Term>).
+
+Each layer exchanges partial results across the {GPUS} chips twice to sum every card's share of attention and the experts (plus a small third exchange at tiny batches of {SLICED_MAX_TOKENS} tokens or fewer, when each GPU computes a 1/{GPUS} slice of the final expert projection and shares its slice with the others; Chapter 6 names these collective steps). Because a token's {TOP_K} chosen experts can land unevenly across the eight chips, a pass waits on whichever GPU drew the most, moving about {count(Math.round(passBytesPerGpu() / 1e9))} GB on the busiest chip even for one person.
+
+Where is all that data kept, and why not on the chip itself?

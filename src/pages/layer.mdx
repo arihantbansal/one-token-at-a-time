@@ -1,0 +1,177 @@
+---
+layout: ../layouts/Stop.astro
+slug: layer
+description: A pass as the GPU sees it, a chain of over a thousand kernels. What each one costs beyond its work, how the CPU keeps up, how CUDA graphs and fused kernels cut the cost, and how eight GPUs combine their parts.
+---
+
+import BusiestGpu from "../components/BusiestGpu.astro";
+import Figure from "../components/Figure.astro";
+import FuseTrips from "../components/FuseTrips.astro";
+import InTheChallenge from "../components/InTheChallenge.astro";
+import KernelCode from "../components/KernelCode.astro";
+import KernelTimeline from "../components/KernelTimeline.astro";
+import LaunchQueue from "../components/LaunchQueue.astro";
+import Deeper from "../components/Deeper.astro";
+import Predict from "../components/Predict.astro";
+import Term from "../components/Term.astro";
+import { contestTimes, decodeThroughput, loadFloors, officialUrl } from "../lib/challenge";
+import { bytes, count, us, worked } from "../lib/format";
+import {
+	EXAMPLE_PLACEMENT,
+	FIXED_US,
+	GRAPH_BLOG_US,
+	layerChain,
+	NORM_GATE_FUSED,
+	NORM_GATE_LIST_BYTES,
+	NORM_GATE_UNFUSED,
+	toyNormGate,
+	trips,
+} from "../lib/kernels";
+import {
+	CONTEXT_TOKENS,
+	EXPERT_BYTES,
+	GPUS,
+	H200,
+	HEAD_DIM,
+	HIDDEN,
+	LAYERS,
+	LOCAL_EXPERTS,
+	memoryUs,
+	N_EXPERTS,
+	Q_HEADS,
+	SLICED_MAX_TOKENS,
+	TOP_K,
+} from "../lib/model";
+
+export const chain = layerChain("sliding");
+export const ofKind = (kind) => chain.filter((k) => k.kind === kind);
+export const small = ofKind("small").length;
+export const tenths = (n) => Math.round(n * 10) / 10;
+export const idealUs = tenths(chain.reduce((a, k) => a + k.us, 0));
+export const smallUs = tenths(ofKind("small").reduce((a, k) => a + k.us, 0));
+export const perPass = chain.length * LAYERS.total;
+export const times = contestTimes("muse_decode_layer");
+export const passUs = 1e6 / decodeThroughput(1).each;
+export const t = toyNormGate();
+export const list = (xs) => xs.map(worked).join(", ");
+export const allHeads = Q_HEADS * GPUS;
+export const loads = loadFloors("muse_decode_layer").length;
+export const expertKernels = chain.findIndex((k) => k.name === "out of the experts") - chain.findIndex((k) => k.name === "sort tokens by expert");
+export const idleGpus = EXAMPLE_PLACEMENT.filter((n) => n === 0).length;
+export const allReducesPerPass = 2 * LAYERS.total;
+
+export const launch = [
+	{
+		code: `norm_gate[(tokens * ${Q_HEADS},)](a, gate, out, 1e-5, D=${HEAD_DIM})`,
+		note: `One program per head per token: ${Q_HEADS} for one person's token. Each head's result is ${HEAD_DIM} numbers.`,
+	},
+];
+
+export const fused = [
+	{ code: "@triton.jit" },
+	{
+		code: "def norm_gate(a_ptr, g_ptr, out_ptr, eps, D: tl.constexpr):",
+		note: "Attention's results, the gate numbers, a place for the output, a tiny number that keeps the division safe, and the head's length. On the toy, `D` is 4.",
+	},
+	{ code: "    head = tl.program_id(0)", note: "Which head this program normalizes." },
+	{ code: "    d = tl.arange(0, D)", note: "Positions 0 to `D` − 1 within the head." },
+	{
+		code: "    a = tl.load(a_ptr + head * D + d).to(tl.float32)",
+		note: `The head's results, widened to 32 bits: ${list(t.a)}.`,
+		kind: "bytes",
+	},
+	{
+		code: "    g = tl.load(g_ptr + head * D + d).to(tl.float32)",
+		note: `Its gate numbers: ${list(t.gate)}.`,
+		kind: "bytes",
+	},
+	{
+		code: "    rms = tl.sqrt(tl.sum(a * a, axis=0) / D + eps)",
+		note: `The average square is ${t.meanSquare}, so the typical size is ${worked(t.rms)}. It stays in a register.`,
+		kind: "math",
+	},
+	{
+		code: "    y = a / rms * tl.sigmoid(g)",
+		note: `Divide by it, ${list(t.scaled)}, then multiply by the squashed gate, ${list(t.squashed)}: ${list(t.out)}.`,
+		kind: "math",
+	},
+	{ code: "    tl.store(out_ptr + head * D + d, y)", note: "Write the head's output.", kind: "bytes" },
+];
+
+To the GPU, a pass is a chain of over {count(Math.floor(perPass / 100) * 100)} kernels in a row. For one person on one GPU, a single layer runs about {chain.length} kernels in sequence, repeated {LAYERS.total} times per token, with each kernel finishing before the next reads its output.
+
+The chain is longer than a layer's high-level diagram because several stages split into multiple kernels: the experts alone take {expertKernels} kernels (sorting tokens by expert, multiplying, combining outputs), and the small ops around attention each run on their own in stock code. The full order sits in the [interactive layer map](/challenge#layer-map).
+
+The big kernels read megabytes of weights, so bandwidth sets their ideal time. Between them sit {small} small kernels touching a few kilobytes of working numbers: normalizing, gating, picking experts, and updating the running total.
+
+## The chain at its ideal
+
+Lay all {chain.length} kernels end to end on one time axis at their ideal floors, then give every kernel a small fixed overhead for starting on the compute blocks, waiting for its first data, and finishing. That cost does not shrink when the work does.
+
+<Predict question={`A layer for one person runs ${chain.length} kernels, ${small} of them small steps that move almost nothing. If every kernel paid ${us(FIXED_US)} of fixed overhead, how much longer would the layer take, and how much of that would the small steps add?`}>
+	{chain.length} × {us(FIXED_US)} = {us(chain.length * FIXED_US)} more on an ideal of {us(idealUs)}. The {small} small steps add {us(small * FIXED_US)} of that overhead for {us(smallUs)} of work.
+</Predict>
+
+<Figure surface="paper" label="one layer for one person, on one time axis">
+	<KernelTimeline />
+</Figure>
+
+At ideal floors, all {small} small steps together take {us(smallUs)} and vanish into the line. With a fixed cost per kernel they become a large share of the layer, growing larger as the big steps get faster. The {us(FIXED_US)} above is an illustration, and real measurements show the same shape: in NVIDIA's <a href="https://developer.nvidia.com/blog/cuda-graphs/">CUDA Graphs benchmark</a>, a short kernel took {GRAPH_BLOG_US.kernel} µs of GPU execution, yet syncing after every launch stretched each call to {GRAPH_BLOG_US.launched} µs; queuing 20 launches asynchronously dropped that to {GRAPH_BLOG_US.async} µs per kernel, and replaying those 20 launches as a CUDA graph cut it to {GRAPH_BLOG_US.graph} µs, still {worked(GRAPH_BLOG_US.graph - GRAPH_BLOG_US.kernel)} µs per kernel above bare runtime.
+
+Production serving sees the same tax. Profiling <Term id="sglang">SGLang</Term> on an H200, the challenge's organizers found the small steps between big kernels take roughly a quarter of a single-user decode pass, as the <a href={officialUrl("muse_decode_layer")}>whole-layer problem</a> describes.
+
+## Who waits for whom
+
+Normally the CPU queues kernels asynchronously without waiting for the previous one to finish. While the GPU runs a big projection, the CPU easily stays ahead and queues several more kernels behind it. When tiny kernels arrive in a row, the GPU finishes each one faster than the CPU can submit the next and sits idle. Below are the three cases on a shared timeline: big kernels, small kernels queued one by one, and small kernels replayed together.
+
+<Figure surface="paper" label="the CPU queues, the GPU runs">
+	<LaunchQueue />
+</Figure>
+
+Big kernels keep the GPU fed; small ones leave it waiting on the CPU. Servers fix CPU starvation by recording a pass's kernel chain once and replaying it with a single CPU call, a <Term id="cudaGraph">CUDA graph</Term>. Because the CPU does not run Python between kernels during replay, the graph's kernels and shapes are fixed at capture time (tensor contents can update in place). Servers therefore capture one graph per batch size, and a kernel that inserts a Python `if` branch on runtime tensor values breaks graph capture.
+
+A graph trims CPU launch cost to near zero, yet each kernel in the graph still starts on the compute blocks, fetches its first data, and finishes before the next starts. The only way to remove that per-kernel cost is to launch fewer kernels.
+
+## Three steps in one kernel
+
+After attention, Muse Spark Open normalizes each head's output to a standard size and multiplies it by a gate, a companion list made by the same projection as the query and squashed through a sigmoid into 0 to 1. Written as separate PyTorch ops, that sequence takes three kernels: normalize, squash the gate, and multiply.
+
+<Figure surface="paper" label="the gated norm, three kernels or one">
+	<FuseTrips />
+</Figure>
+
+The three-kernel version writes two intermediate lists out to global memory and reads them back, {trips(NORM_GATE_UNFUSED)} global-memory trips and {NORM_GATE_UNFUSED.length} launches. One combined kernel keeps those intermediates in registers: {trips(NORM_GATE_FUSED)} trips and one launch. Combining adjacent operations into one kernel is <Term id="fusion">fusion</Term>. For one token each list is only {bytes(NORM_GATE_LIST_BYTES)}, small enough to sit in L2 cache rather than crossing HBM, so the immediate saving is cutting two launches and their global-memory instructions; at larger batches the intermediate tensors outgrow L2 and fusion saves HBM traffic as well. Triton's <a href="https://triton-lang.org/main/getting-started/tutorials/02-fused-softmax.html">fused softmax tutorial</a> makes the same count on wider rows and measures the speedup.
+
+<Deeper title="The fused kernel, line by line">
+	<p>
+		One program per head loads that head's attention output and gate numbers, normalizes and gates them in registers, and stores the result once. The worked values follow a 4-number toy head (using our four working numbers from kernel 1). Unlike kernel 1, it needs no loop and no mask because a head of {HEAD_DIM} numbers fits in one tile, and the RMS scale never leaves a register.
+	</p>
+	<KernelCode lines={launch} title="the launch" />
+	<KernelCode lines={fused} title="the body" />
+</Deeper>
+
+## Eight GPUs as one
+
+Each pass runs across all {GPUS} H200s together, splitting every layer two ways:
+
+1. <Term id="tensorParallel">Tensor parallelism</Term> for attention: the model's {allHeads} query heads divide evenly so each GPU computes {Q_HEADS} of them. Because each of the {count(HIDDEN)} outputs leaving attention is a weighted sum over all {allHeads} heads, each GPU's output projection sums only its own {Q_HEADS} heads, producing a partial subtotal. The {GPUS} GPUs exchange and add those eight subtotals so every card holds the full sum, an <Term id="allReduce">all-reduce</Term>.
+2. <Term id="expertParallel">Expert parallelism</Term> for the experts: each GPU holds {LOCAL_EXPERTS} of every layer's {N_EXPERTS} experts and runs whichever of its local experts were chosen, producing a partial weighted blend of the token's {TOP_K} experts. A second all-reduce adds the eight cards' pieces together.
+
+<Figure surface="paper" label="one token's experts on eight GPUs">
+	<BusiestGpu />
+</Figure>
+
+In this draw, {idleGpus === 3 ? "three" : count(idleGpus)} GPUs had nothing to read and waited for the busiest card. Each expert takes {us(memoryUs(EXPERT_BYTES))} to read at peak bandwidth, so an uneven routing draw stretches the pass.
+
+Even when the exchanged vector is tiny ({bytes(HIDDEN * 2)} for one token), collectives add up over {LAYERS.total} layers: {allReducesPerPass} cross-GPU all-reduces per pass, plus {LAYERS.total} small all-gathers at tiny batches ({SLICED_MAX_TOKENS} tokens or fewer), where each GPU computes a 1/{GPUS} slice of the final expert projection and shares its slice so every card holds the full vector. At typical NVSwitch collective latencies of several microseconds each, communication adds on the order of a millisecond to a real {GPUS}-GPU pass, substantial next to our {us(passUs)} single-GPU ideal. NVIDIA's <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">NCCL guide</a> diagrams how all-reduce and other GPU collectives move those bytes.
+
+<InTheChallenge problem="muse_decode_layer">
+	<p>
+		<code>muse_decode_layer</code> times a full single-GPU layer across {loads} decode and verify loads around {count(CONTEXT_TOKENS)} tokens. Combined across its loads, the ideal floor is {us(times.ideal)} per pass, SGLang takes {us(times.sglang)}{times.best !== undefined && <>, and the best entry takes {us(times.best)}</>}. Because the judge's floor derives each shape's minimum from aggregate bytes and arithmetic with zero per-kernel overhead, the gap above it reflects launch overhead, unfused small ops, imperfect bandwidth utilization, and imperfect overlap.
+	</p>
+	<p>
+		Entries must replay inside a CUDA graph (forbidding runtime Python branching on tensor data), the judge subtracts the graph replay's fixed cost from both sides, and cross-GPU collectives are omitted to isolate single-GPU kernel speed. As the brief notes, this is the problem that rewards fusing across steps.
+	</p>
+</InTheChallenge>
+
+Almost every heavy kernel in a layer reads weight tables, except one. Attention's mixing step has no weights at all. What does its kernel read instead, and how can it keep {H200.sms} compute blocks busy for one person's token?

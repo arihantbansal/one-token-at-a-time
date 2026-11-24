@@ -1,0 +1,215 @@
+---
+// Speculative decoding as a filmstrip: an eight-token draft, then two ways the big model's
+// single checking pass can go. The big model picks greedily, so both cases agree on its token
+// after the context ("in"), and the second case needs a draft that guesses something else.
+// Every row sits on the same eight slots, so a token keeps its place from row to row. Kept guesses
+// are filled, the big model's own token is inverted and takes the wrong guess's slot, and
+// everything after it is struck out.
+import { DRAFT_TOKENS } from "../lib/model";
+
+const CONTEXT = "…the best time to visit is";
+const DRAFT = [" in", " spring", ",", " when", " the", " weather", " is", " mild"].slice(0, DRAFT_TOKENS);
+
+const OTHER_DRAFT = [" during", " the", " spring", ",", " when", " it", " is", " mild"].slice(
+	0,
+	DRAFT_TOKENS,
+);
+
+type Case = { title: string; draft: string[]; right: number; own: string };
+const CASES: Case[] = [
+	{ title: "the first three guesses are right", draft: DRAFT, right: 3, own: " before" },
+	{
+		title: `the draft had started with "${OTHER_DRAFT[0].trim()}"`,
+		draft: OTHER_DRAFT,
+		right: 0,
+		own: " in",
+	},
+];
+
+const tokens = (n: number) => `${n} ${n === 1 ? "token" : "tokens"}`;
+const words = (ts: string[]) => ts.join("").trim();
+const chip = (t: string) => t.trimStart();
+---
+
+<div class="film">
+	<section class="frame">
+		<p class="label"><span class="step">1</span> a small model drafts {DRAFT.length} tokens</p>
+		<p class="context">after "{CONTEXT}"</p>
+		<div class="row" role="img" aria-label={`Draft of ${DRAFT.length} guessed tokens after "${CONTEXT}": ${words(DRAFT)}`}>
+			{DRAFT.map((t) => <span class="chip guess">{chip(t)}</span>)}
+		</div>
+	</section>
+
+	{
+		CASES.map((c) => (
+			<div class="case">
+				<h3>if {c.title}</h3>
+				<section class="frame">
+					<p class="label">
+						<span class="step">2</span> the big model checks all {DRAFT.length} in one pass
+					</p>
+					<div
+						class="row"
+						role="img"
+						aria-label={`${c.right === 0 ? "The first guess is wrong" : `Guesses 1 to ${c.right} are right, guess ${c.right + 1} is wrong`}; the rest depend on a wrong guess.`}
+					>
+						{c.draft.map((t, i) => (
+							<span class:list={["slot", { dim: i > c.right }]}>
+								<span class="chip guess">{chip(t)}</span>
+								{i <= c.right ? <span class="mark">{i < c.right ? "✓" : "✗"}</span> : <span class="mark none" />}
+							</span>
+						))}
+					</div>
+				</section>
+				<section class="frame">
+					<p class="label">
+						<span class="step">3</span> the reply grows by {tokens(c.right + 1)}
+					</p>
+					<div
+						class="row"
+						role="img"
+						aria-label={`Kept: ${words([...c.draft.slice(0, c.right), c.own])}. Discarded: ${words(c.draft.slice(c.right))}.`}
+					>
+						{c.draft.map((t, i) =>
+							i < c.right ? (
+								<span class="chip kept">{chip(t)}</span>
+							) : i === c.right ? (
+								<span class="chip own">{chip(c.own)}</span>
+							) : (
+								<span class="chip gone dim">{chip(t)}</span>
+							),
+						)}
+					</div>
+				</section>
+			</div>
+		))
+	}
+
+	<p class="key">
+		<span><span class="chip guess">guess</span> drafted</span>
+		<span><span class="chip kept">kept</span> a guess the big model agrees with</span>
+		<span><span class="chip own">own</span> the big model's own token</span>
+		<span><span class="chip gone dim">gone</span> thrown away</span>
+	</p>
+</div>
+
+<style>
+	.film {
+		display: grid;
+		gap: 1.75rem;
+		max-width: 46rem;
+		margin: 0 auto;
+		font: 0.75rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	h3 {
+		margin: 0;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink);
+	}
+	.case {
+		display: grid;
+		gap: 1.25rem;
+		padding-top: 1.5rem;
+		border-top: 1px dashed var(--rule);
+	}
+	.label {
+		margin-bottom: 0.625rem;
+		font-size: 0.8125rem;
+	}
+	.context {
+		margin: -0.25rem 0 0.625rem;
+	}
+	.step {
+		display: inline-grid;
+		place-items: center;
+		width: 1.25rem;
+		height: 1.25rem;
+		margin-right: 0.375rem;
+		border: 1px solid var(--rule);
+		border-radius: 50%;
+		font-size: 0.6875rem;
+		color: var(--ink);
+	}
+	/* Eight fixed slots; below 48rem, two rows of four. */
+	.row {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		align-items: start;
+		gap: 0.5rem 4px;
+	}
+	@media (min-width: 48rem) {
+		.row {
+			grid-template-columns: repeat(8, minmax(0, 1fr));
+		}
+	}
+	.slot {
+		display: grid;
+	}
+	.mark {
+		display: grid;
+		place-items: center;
+		height: 1.25rem;
+		border: 1px solid var(--ink-2);
+		border-top: 0;
+		color: var(--ink);
+		font-size: 0.8125rem;
+		line-height: 1;
+	}
+	.mark.none {
+		border-color: transparent;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 1.875rem;
+		padding: 0.2rem 0.25rem;
+		border: 1px solid var(--rule);
+		background: var(--paper);
+		color: var(--ink);
+		white-space: pre;
+	}
+	.guess {
+		border-style: dashed;
+		border-color: var(--ink-2);
+		background: transparent;
+	}
+	.kept {
+		border: 1.25px solid var(--ink);
+		background: var(--faint);
+	}
+	.own {
+		border: 1.25px solid var(--ink);
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.gone {
+		border-style: dashed;
+		background: transparent;
+		text-decoration: line-through;
+	}
+	@media (max-width: 30rem) {
+		.row .chip {
+			font-size: 0.6875rem;
+		}
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1.25rem;
+		padding-top: 1.25rem;
+		border-top: 1px dashed var(--rule);
+	}
+	.key > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.key .chip {
+		padding-inline: 0.375rem;
+	}
+</style>

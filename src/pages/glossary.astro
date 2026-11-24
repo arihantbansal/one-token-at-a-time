@@ -1,0 +1,217 @@
+---
+import { CATEGORIES, type Entry, GLOSSARY } from "../data/glossary";
+import Base from "../layouts/Base.astro";
+
+const entries = Object.entries<Entry>(GLOSSARY).sort(([, a], [, b]) =>
+	a.term.localeCompare(b.term, "en", { sensitivity: "base" }),
+);
+---
+
+<Base title="Glossary" description="Every term used in the guide, in plain words." slug="glossary">
+	<article class="article">
+		<header class="page-head">
+			<p class="meta">reference · {entries.length} terms</p>
+			<h1>Glossary</h1>
+			<p class="lede">Every term used in the guide, in plain words.</p>
+		</header>
+		<div class="filters" role="search">
+			<label class="search">
+				<span class="visually-hidden">Search terms and definitions</span>
+				<input id="glossary-search" type="search" placeholder="Search terms and definitions…" autocomplete="off" />
+			</label>
+			<div class="seg" role="group" aria-label="Filter by part of the guide">
+				<button type="button" aria-pressed="true" data-category="all">all</button>
+				{
+					Object.entries(CATEGORIES).map(([key, label]) => (
+						<button type="button" aria-pressed="false" data-category={key}>
+							{label.toLowerCase()}
+						</button>
+					))
+				}
+			</div>
+			<p class="count" id="glossary-count" role="status" data-total={entries.length}>{entries.length} terms</p>
+		</div>
+		<dl class="terms">
+			{
+				entries.map(([id, e]) => (
+					<div id={id} data-category={e.category} data-text={`${e.term} ${e.short}`.toLowerCase()}>
+						<dt>{e.term}</dt>
+						<dd>
+							{e.short}
+							<span class="tags">
+								<span class="badge">{CATEGORIES[e.category]}</span>
+								{e.chapter && <a href={e.chapter.href}>{e.chapter.label}</a>}
+								{e.link && (
+									<a href={e.link.href} target="_blank" rel="noopener noreferrer">
+										{e.link.label}
+									</a>
+								)}
+							</span>
+						</dd>
+					</div>
+				))
+			}
+		</dl>
+	</article>
+</Base>
+
+<script>
+	// Filters the list as you type or pick a part; a link to a hidden term resets the filters first.
+	// Runs on astro:page-load so client-side View Transitions re-bind to the fresh DOM.
+	function initGlossary() {
+		const search = document.querySelector<HTMLInputElement>("#glossary-search");
+		const count = document.querySelector<HTMLElement>("#glossary-count");
+		if (!search || !count || search.dataset.bound) return;
+		search.dataset.bound = "1";
+		const pills = [...document.querySelectorAll<HTMLButtonElement>(".seg button")];
+		const rows = [...document.querySelectorAll<HTMLElement>(".terms > div")];
+		let category = "all";
+
+		function apply() {
+			if (!search || !count) return;
+			const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+			const filtered = category !== "all" || words.length > 0;
+			let shown = 0;
+			for (const row of rows) {
+				const match =
+					(category === "all" || row.dataset.category === category) &&
+					words.every((w) => row.dataset.text?.includes(w));
+				row.hidden = !match;
+				if (match) shown++;
+			}
+			count.textContent = filtered ? `${shown} matching` : `${count.dataset.total} terms`;
+			for (const pill of pills) pill.setAttribute("aria-pressed", String(pill.dataset.category === category));
+		}
+
+		function reveal() {
+			const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+			if (!target?.hidden) return;
+			category = "all";
+			if (search) search.value = "";
+			apply();
+			target.scrollIntoView();
+		}
+
+		search.addEventListener("input", apply);
+		for (const pill of pills) {
+			pill.addEventListener("click", () => {
+				category = pill.dataset.category ?? "all";
+				apply();
+			});
+		}
+		const onHash = () => {
+			if (!search.isConnected) {
+				removeEventListener("hashchange", onHash);
+				return;
+			}
+			reveal();
+		};
+		addEventListener("hashchange", onHash);
+		reveal();
+	}
+
+	document.addEventListener("astro:page-load", initGlossary);
+</script>
+
+<style>
+	.filters {
+		display: grid;
+		gap: 0.75rem;
+		margin-bottom: 1.25rem;
+		font-family: var(--mono);
+		font-size: 0.8125rem;
+	}
+	.search input {
+		box-sizing: border-box;
+		width: 100%;
+		min-height: 2.25rem;
+		padding: 0.35rem 0.7rem;
+		border: 1px solid var(--rule);
+		border-radius: 2px;
+		background: var(--paper);
+		color: var(--ink);
+		font: inherit;
+	}
+	.search input::placeholder {
+		color: var(--ink-2);
+		opacity: 1;
+	}
+	.count {
+		margin: 0;
+		color: var(--ink-2);
+		font-variant-numeric: tabular-nums;
+	}
+	.terms {
+		margin-block: 0;
+		border-top: 1px solid var(--rule);
+	}
+	.terms > div {
+		padding: 0.875rem 0 1rem;
+		border-bottom: 1px dashed var(--rule);
+		scroll-margin-top: 7rem;
+	}
+	.terms > div[hidden] {
+		display: none;
+	}
+	dt {
+		margin-bottom: 0.2rem;
+		font-weight: 600;
+	}
+	dd {
+		margin: 0;
+		color: var(--ink-2);
+	}
+	.tags {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.25rem 1rem;
+		margin-top: 0.5rem;
+		font-family: var(--mono);
+		font-size: 0.75rem;
+	}
+	.tags a {
+		overflow-wrap: anywhere;
+	}
+	.badge {
+		padding: 0 0.4rem;
+		border: 1px solid var(--rule);
+		border-radius: 2px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-size: 0.6875rem;
+	}
+	@media (min-width: 40rem) {
+		.filters {
+			grid-template-columns: minmax(0, 1fr) auto;
+			align-items: center;
+		}
+		.count {
+			grid-column: 1 / -1;
+		}
+	}
+	@media (min-width: 48rem) {
+		.filters {
+			position: sticky;
+			top: var(--bar-height);
+			z-index: 5;
+			margin-inline: calc(var(--gutter) * -1);
+			padding: 0.75rem var(--gutter);
+			background: var(--page);
+			border-bottom: 1px solid var(--rule);
+		}
+		.terms {
+			border-top: 0;
+		}
+		.terms > div {
+			display: grid;
+			grid-template-columns: 11rem minmax(0, 1fr);
+			gap: 1.5rem;
+		}
+	}
+	@media (min-width: 64rem) {
+		.filters {
+			top: 0;
+		}
+	}
+</style>

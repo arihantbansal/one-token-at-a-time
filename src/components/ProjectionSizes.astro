@@ -1,0 +1,98 @@
+---
+// The five weight tables of one layer drawn to one scale: each as wide as the numbers it takes
+// in and as tall as the numbers it gives out, with its exact size beside it.
+import { count } from "../lib/format";
+import { PROJECTIONS, type Projection } from "../lib/model";
+
+type Props = { names: Record<Projection["id"], string> };
+const { names } = Astro.props;
+
+const UNIT = 1024;
+const tables = PROJECTIONS.map((p) => ({ name: names[p.id], w: p.cols / UNIT, h: p.rows / UNIT, p }));
+---
+
+<div class="sizes">
+	<p class="legend">as wide as the numbers in, as tall as the numbers out</p>
+	<ul class="tables" aria-label="the five weight tables of one layer, drawn to one scale">
+		{
+			tables.map((t) => (
+				<li class="table">
+					<span class="shape" aria-hidden="true">
+						<span class="block obj-weight" style={`--w: ${t.w}; --h: ${t.h}`} />
+					</span>
+					<span class="label">
+						<span class="name">{t.name}</span>
+						<span class="size">
+							{count(t.p.cols)} in
+							<br />
+							{count(t.p.rows)} out
+						</span>
+					</span>
+				</li>
+			))
+		}
+	</ul>
+</div>
+
+<style>
+	.sizes {
+		--u: 0.875rem;
+		max-width: 40rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.legend {
+		font-size: 0.75rem;
+		text-align: center;
+	}
+	.tables {
+		display: grid;
+		gap: 1.25rem;
+		margin: 1.5rem 0 0;
+		padding: 0;
+		list-style: none;
+	}
+	.table {
+		display: grid;
+		grid-template-columns: calc(8 * var(--u)) minmax(0, 1fr);
+		align-items: start;
+		gap: 1rem;
+	}
+	.shape {
+		display: block;
+	}
+	.block {
+		display: block;
+		min-width: 0;
+		width: calc(var(--w) * var(--u));
+		height: max(4px, calc(var(--h) * var(--u)));
+	}
+	.label {
+		display: grid;
+		gap: 0.125rem;
+		margin-top: -0.2em;
+	}
+	.name {
+		color: var(--ink);
+	}
+	.size {
+		font-size: 0.75rem;
+		font-variant-numeric: tabular-nums;
+	}
+	@media (min-width: 40rem) {
+		.sizes {
+			--u: 1rem;
+		}
+		/* Two columns, filled top to bottom, so the five keep their order. */
+		.tables {
+			grid-template-columns: 1fr 1fr;
+			grid-template-rows: repeat(3, auto);
+			grid-auto-flow: column;
+			gap: 1.5rem 2.5rem;
+		}
+	}
+</style>

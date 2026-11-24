@@ -1,0 +1,32 @@
+---
+// A question to answer before reading on, with the answer folded beneath it: the reader commits to
+// a guess, then checks it. Uses the guide's own numbers, passed in by the page.
+type Props = { question: string };
+const { question } = Astro.props;
+---
+
+<details class="fold predict">
+	<summary>
+		<span class="fold-glyph" aria-hidden="true">?</span>
+		<span class="tag">before you read on</span>
+		<span class="q">{question}</span>
+	</summary>
+	<div class="fold-body"><slot /></div>
+</details>
+
+<style>
+	.tag {
+		grid-row: 1;
+		font-size: 0.6875rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+	.q {
+		grid-column: 2 / -1;
+		padding-bottom: 0.2rem;
+		font-family: var(--serif);
+		font-size: 1.125rem;
+		line-height: 1.5;
+		color: var(--ink);
+	}
+</style>

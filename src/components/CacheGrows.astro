@@ -1,0 +1,117 @@
+---
+// A filmstrip of three passes over the running example, with a toy window of three tokens.
+// Each pass adds one entry to the cache; the full layer reads them all, the sliding layer the
+// latest three.
+import { WORDS } from "../lib/riverBank";
+
+const WINDOW = 3;
+const FRAMES = [4, 5, 6];
+const LAYERS = [
+	{ name: "full layer", first: () => 0 },
+	{ name: "sliding layer, window of three", first: (n: number) => n - WINDOW },
+];
+---
+
+<div class="strip" style={`--cols: ${WORDS.length}`}>
+	<p class="legend">
+		<span><span class="obj-cache mini" aria-hidden="true"></span> cache entry</span>
+		<span><span class="obj-cache mini added" aria-hidden="true"></span> added this pass</span>
+		<span class="bytes"><span aria-hidden="true">■ </span>read this pass</span>
+	</p>
+	{
+		FRAMES.map((n) => (
+			<section class="frame">
+				<h3>
+					pass for "{WORDS[n - 1]}"
+				</h3>
+				{LAYERS.map((layer) => {
+					const first = layer.first(n);
+					return (
+						<div class="layer">
+							<p class="name">{layer.name}</p>
+							<ol
+								class="entries"
+								aria-label={`${n} entries, ${n - first} read: ${WORDS.slice(first, n).join(", ")}`}
+							>
+								{WORDS.slice(0, n).map((w, i) => (
+									<li>
+										<span class:list={["obj-cache", "entry", { added: i === n - 1 }]}>{w}</span>
+										<span class="mark" aria-hidden="true">
+											{i >= first ? "■" : ""}
+										</span>
+									</li>
+								))}
+							</ol>
+						</div>
+					);
+				})}
+			</section>
+		))
+	}
+</div>
+
+<style>
+	.strip {
+		max-width: 32rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem 1.25rem;
+		margin: 0 0 1.25rem;
+		font-size: 0.75rem;
+	}
+	.legend > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.mini {
+		--obj: 0.875rem;
+		min-width: 0.875rem;
+	}
+	.frame + .frame {
+		margin-top: 1.25rem;
+		padding-top: 1.25rem;
+		border-top: 1px dashed var(--rule);
+	}
+	h3 {
+		margin: 0 0 0.625rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	.layer + .layer {
+		margin-top: 0.625rem;
+	}
+	.name {
+		margin: 0 0 0.25rem;
+		font-size: 0.75rem;
+	}
+	.entries {
+		display: grid;
+		grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+		gap: 3px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.entry {
+		--obj: 1.75rem;
+		width: 100%;
+		min-width: 0;
+		overflow: hidden;
+	}
+	.added {
+		border: 1.5px solid var(--ink);
+		color: var(--ink);
+	}
+	.mark {
+		display: block;
+		height: 1.1rem;
+		text-align: center;
+		color: var(--bytes);
+	}
+</style>

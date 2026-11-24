@@ -1,0 +1,144 @@
+---
+// The running example's cache in every layer, during the pass for its last word: each layer
+// keeps its own entry for every token, and the new token adds one to each. The first layers and
+// the last few are drawn; the gap between them stands for the rest.
+import { LAYERS } from "../lib/model";
+import { WORDS } from "../lib/riverBank";
+
+const FIRST = 8;
+const LAST = 3;
+const rows: (number | null)[] = [
+	...Array.from({ length: FIRST }, (_, i) => i + 1),
+	null,
+	...Array.from({ length: LAST }, (_, i) => LAYERS.total - LAST + i + 1),
+];
+const newest = WORDS[WORDS.length - 1];
+const isNew = (i: number) => i === WORDS.length - 1;
+---
+
+<div class="stack" style={`--cols: ${WORDS.length}; --rows: ${rows.length + 1}`}>
+	<p class="legend">
+		<span><span class="obj-cache mini" aria-hidden="true"></span> one token's key and value in one layer</span>
+		<span><span class="obj-cache mini added" aria-hidden="true"></span> added in the pass for "{newest}"</span>
+	</p>
+	<div
+		class="grid"
+		role="img"
+		aria-label={`${LAYERS.total} layers, each keeping one cache entry for each of the ${WORDS.length} tokens; the pass for "${newest}" adds one entry to every layer.`}
+	>
+		<span class="newcol" aria-hidden="true"></span>
+		<span class="head">layer</span>
+		{WORDS.map((w, i) => <span class:list={["word", { added: isNew(i) }]}>{w}</span>)}
+		{
+			rows.map((layer) =>
+				layer === null ? (
+					<>
+						<span class="layer gap">⋮</span>
+						{WORDS.map(() => (
+							<span class="gap">⋮</span>
+						))}
+					</>
+				) : (
+					<>
+						<span class="layer">{layer}</span>
+						{WORDS.map((_, i) => (
+							<span class:list={["obj-cache", "cell", { added: isNew(i) }]} />
+						))}
+					</>
+				),
+			)
+		}
+	</div>
+	<p class="note">one row per layer, all {LAYERS.total}: one new entry in each</p>
+</div>
+
+<style>
+	.stack {
+		max-width: 24rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.legend {
+		display: grid;
+		gap: 0.375rem;
+		margin: 0 0 1.5rem;
+		font-size: 0.75rem;
+	}
+	.legend > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.mini {
+		--obj: 0.875rem;
+		min-width: 1.25rem;
+	}
+	.grid {
+		position: relative;
+		display: grid;
+		grid-template-columns: auto repeat(var(--cols), minmax(0, 1fr));
+		grid-template-rows: repeat(var(--rows), auto);
+		gap: 0.375rem 0.5rem;
+		align-items: center;
+	}
+	.head,
+	.word {
+		padding-bottom: 0.25rem;
+		font-size: 0.75rem;
+		line-height: 1;
+	}
+	.word {
+		text-align: center;
+		white-space: nowrap;
+	}
+	.word.added {
+		color: var(--ink);
+	}
+	.layer {
+		text-align: right;
+		padding-right: 0.25rem;
+		font-size: 0.75rem;
+		font-variant-numeric: tabular-nums;
+	}
+	.gap {
+		text-align: center;
+		line-height: 1;
+	}
+	.cell {
+		--obj: 1rem;
+		width: 100%;
+		min-width: 0;
+	}
+	.added:is(.cell, .mini) {
+		background: var(--paper);
+		border: 1.5px solid var(--ink);
+	}
+	/* Absolute, so it outlines the newest column without taking part in placing the cells. */
+	.newcol {
+		position: absolute;
+		grid-column: -2;
+		grid-row: 1 / -1;
+		inset: -0.375rem -0.1875rem;
+		border: 1px solid var(--ink-2);
+		border-radius: 4px;
+	}
+	@media (max-width: 30rem) {
+		.grid {
+			column-gap: 0.375rem;
+		}
+		.word {
+			font-size: 0.6875rem;
+		}
+		/* The note below names the rows, so the narrow grid gives this column's width to the words. */
+		.head {
+			visibility: hidden;
+			width: 0;
+		}
+	}
+	.note {
+		margin: 1rem 0 0;
+		font-size: 0.75rem;
+		text-align: center;
+	}
+</style>

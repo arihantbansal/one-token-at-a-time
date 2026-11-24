@@ -1,0 +1,93 @@
+---
+// A screen shows the machine at work; paper holds worked examples and maps. Figures are numbered
+// per chapter by the frame ("fig 5.2"); `label` is the figure's short name, shown beside it.
+type Props = { surface?: "screen" | "paper"; label?: string };
+const { surface = "screen", label } = Astro.props;
+---
+
+<figure class="fig wide" data-surface={surface} data-label={label}>
+	<div class:list={["panel", { screen: surface === "screen" }]}>
+		<p class="tag">{label}</p>
+		<slot />
+	</div>
+	{Astro.slots.has("caption") && <figcaption><slot name="caption" /></figcaption>}
+</figure>
+
+<style>
+	.fig {
+		counter-increment: fig;
+		margin: 2.75rem 0 3rem;
+	}
+	.panel {
+		position: relative;
+		padding: 0.875rem clamp(0.75rem, 3vw, 1.75rem) clamp(1rem, 3vw, 1.75rem);
+	}
+	.tag {
+		margin: 0 0 1.25rem;
+		font: 0.6875rem/1.4 var(--mono);
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--ink-2);
+	}
+	.tag::before {
+		content: "fig " counter(fig);
+	}
+	:global(.chapter) .tag::before {
+		content: "fig " var(--chapter) "." counter(fig);
+	}
+	.tag:not(:empty)::before {
+		margin-right: 0.75rem;
+	}
+	/* A fold's content leaves the count when it closes, so figures inside one go unnumbered
+	   rather than renumbering the rest of the chapter as it opens. */
+	:global(.fold) .fig {
+		counter-increment: none;
+	}
+	:global(.fold) .tag::before {
+		content: none;
+	}
+	:global(.fold) .tag:empty {
+		display: none;
+	}
+	.screen {
+		background-color: var(--paper);
+		box-shadow: var(--shadow-screen);
+	}
+	[data-surface="paper"] .panel {
+		border: 1px solid var(--rule);
+		border-radius: 2px;
+		background-color: var(--paper-2);
+		background-image: radial-gradient(
+			circle at 1px 1px,
+			color-mix(in oklab, var(--rule) 75%, transparent) 1px,
+			transparent 1.25px
+		);
+		background-size: 1rem 1rem;
+		background-position: -1px -1px;
+	}
+	/* Each instrument's readout is its answer, so it reads at a glance. */
+	.screen :global(dd) {
+		font-size: 1.125rem;
+		text-shadow: 0 0 12px color-mix(in oklab, currentColor 40%, transparent);
+	}
+	figcaption {
+		max-width: var(--measure);
+		margin: 0.75rem 0 0;
+		font: 0.75rem/1.6 var(--mono);
+		color: var(--ink-2);
+		text-wrap: pretty;
+	}
+	/* On a phone a figure in the main column takes the full width of the screen. */
+	@media (max-width: 40rem) {
+		:global(.article) > .fig {
+			margin-inline: calc(-1 * var(--gutter));
+		}
+		:global(.article) > .fig .panel {
+			border-inline: 0;
+			border-radius: 0;
+		}
+		:global(.article) > .fig figcaption {
+			padding-inline: var(--gutter);
+		}
+	}
+</style>

@@ -1,0 +1,123 @@
+---
+// The whole model's weights drawn to scale, a square per billion: the weights outside the
+// experts, which every token reads, and the experts, of which one token reads the few it picks.
+// The squares a token reads are scattered because its picks differ from layer to layer.
+import { count } from "../lib/format";
+import { EXPERT_WEIGHTS, LAYERS, N_EXPERTS, TOP_K, TOTAL_WEIGHTS } from "../lib/model";
+import { seeded } from "../lib/random";
+
+const B = 1e9;
+const experts = Math.round((N_EXPERTS * EXPERT_WEIGHTS * LAYERS.total) / B);
+const outside = Math.round(TOTAL_WEIGHTS / B) - experts;
+const picked = Math.round((experts * TOP_K) / N_EXPERTS);
+
+const COLS = 34;
+const PITCH = 8;
+const SIDE = 6;
+
+const rand = seeded(4096);
+const lit = new Set<number>();
+while (lit.size < picked) lit.add(Math.floor(rand() * experts));
+
+const grid = (n: number, read: (i: number) => boolean) => ({
+	width: COLS * PITCH,
+	height: Math.ceil(n / COLS) * PITCH,
+	cells: Array.from({ length: n }, (_, i) => ({
+		x: (i % COLS) * PITCH + 1,
+		y: Math.floor(i / COLS) * PITCH + 1,
+		read: read(i),
+	})),
+});
+
+const groups = [
+	{
+		title: "outside the experts",
+		note: "used by every token",
+		label: `${count(outside)} squares, nearly all read for one token`,
+		...grid(outside, () => true),
+	},
+	{
+		title: "the experts",
+		note: "read only when picked",
+		label: `${count(experts)} squares, ${count(picked)} of them read for one token`,
+		...grid(experts, (i) => lit.has(i)),
+	},
+];
+---
+
+<div class="active">
+	<p class="legend">
+		<span class="bytes">■ read for one token</span>
+		<span><span class="idle" aria-hidden="true"></span> not read</span>
+		<span>each square is a billion weights</span>
+	</p>
+	{
+		groups.map((g) => (
+			<section class="group">
+				<h3>
+					{g.title} <span>{g.note}</span>
+				</h3>
+				<svg viewBox={`0 0 ${g.width} ${g.height}`} role="img" aria-label={g.label}>
+					{g.cells.map((c) => (
+						<rect class:list={{ read: c.read }} x={c.x} y={c.y} width={SIDE} height={SIDE} />
+					))}
+				</svg>
+			</section>
+		))
+	}
+</div>
+
+<style>
+	.active {
+		max-width: 26rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem 1.25rem;
+		margin: 0 0 1.25rem;
+		font-size: 0.75rem;
+	}
+	.legend > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.idle {
+		width: 0.75rem;
+		height: 0.75rem;
+		border: 1px solid var(--rule);
+	}
+	.group + .group {
+		margin-top: 1rem;
+	}
+	h3 {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 0 1rem;
+		margin: 0 0 0.375rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	h3 span {
+		color: var(--ink-2);
+	}
+	svg {
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+	rect {
+		fill: none;
+		stroke: var(--rule);
+		stroke-width: 1;
+	}
+	rect.read {
+		fill: var(--bytes);
+		stroke: var(--bytes);
+	}
+</style>

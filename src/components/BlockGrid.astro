@@ -1,0 +1,45 @@
+---
+// The H200's compute blocks as a grid of tiles, the first `busy` of them working. Shared by the
+// figures that hand programs to blocks.
+import { count } from "../lib/format";
+import { H200 } from "../lib/model";
+
+type Props = { busy: number; label?: string };
+const { busy, label } = Astro.props;
+const working = Math.min(busy, H200.sms);
+const said = label ?? `${count(working)} of ${count(H200.sms)} compute blocks working`;
+---
+
+<div class="block-grid">
+	<div class="tiles" role="img" aria-label={said}>
+		{Array.from({ length: H200.sms }, (_, i) => <i class:list={{ on: i < working }} />)}
+	</div>
+	<p class="said">{said}</p>
+</div>
+
+<style>
+	.block-grid {
+		display: grid;
+		gap: 0.5rem;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.tiles {
+		display: grid;
+		grid-template-columns: repeat(22, minmax(0, 1fr));
+		gap: 2px;
+		max-width: 26rem;
+	}
+	i {
+		aspect-ratio: 1;
+		border: 1px dashed var(--rule);
+		border-radius: 3px;
+	}
+	i.on {
+		border: 1.5px solid var(--ink);
+		background: var(--faint);
+	}
+	.said {
+		margin: 0;
+	}
+</style>

@@ -1,0 +1,509 @@
+---
+import { worked } from "../lib/format";
+// Three scales joined by zoom lines: the server's GPUs, one H200 package (memory stacks either
+// side of the die, joined to it by a short, wide path), and one compute block where a weight
+// arrives and is used twice. Drawn in an oblique projection so the package reads as an object;
+// a wide and a narrow arrangement share every shape and differ only in placement.
+import { GPUS, H200 } from "../lib/model";
+import { W, X } from "../lib/toy";
+
+type Pt = [number, number];
+type Proj = (x: number, d: number, z: number) => Pt;
+type Box = { x: [number, number]; d: [number, number]; z: [number, number] };
+
+// x runs right, d runs away from the reader, z runs up.
+const KX = 0.34;
+const KY = 0.6;
+const project =
+	(ox: number, oy: number, s: number): Proj =>
+	(x, d, z) => [ox + s * (x + d * KX), oy - s * (d * KY + z)];
+const r1 = (n: number) => Math.round(n * 10) / 10;
+const poly = (ps: Pt[]) => ps.map(([x, y]) => `${r1(x)},${r1(y)}`).join(" ");
+const faces = (p: Proj, { x: [x0, x1], d: [d0, d1], z: [z0, z1] }: Box) => ({
+	top: poly([p(x0, d0, z1), p(x1, d0, z1), p(x1, d1, z1), p(x0, d1, z1)]),
+	front: poly([p(x0, d0, z0), p(x1, d0, z0), p(x1, d0, z1), p(x0, d0, z1)]),
+	side: poly([p(x1, d0, z0), p(x1, d1, z0), p(x1, d1, z1), p(x1, d0, z1)]),
+});
+const seg = (a: Pt, b: Pt) => ({ x1: r1(a[0]), y1: r1(a[1]), x2: r1(b[0]), y2: r1(b[1]) });
+
+// The server: a board carrying the GPUs in a row.
+const MOD = { w: 36, gap: 8, pad: 14 };
+const boardW = 2 * MOD.pad + GPUS * MOD.w + (GPUS - 1) * MOD.gap;
+const BOARD: Box = { x: [0, boardW], d: [0, 56], z: [0, 5] };
+const PICK = Math.floor(GPUS / 2) - 1;
+const modBox = (i: number): Box => {
+	const x0 = MOD.pad + i * (MOD.w + MOD.gap);
+	return { x: [x0, x0 + MOD.w], d: [8, 48], z: [5, 21] };
+};
+
+// One H200: substrate, the silicon base the chips sit on, the die, and the memory stacks.
+const SUB: Box = { x: [0, 400], d: [0, 250], z: [0, 10] };
+const BASE: Box = { x: [40, 360], d: [25, 225], z: [10, 14] };
+const DIE: Box = { x: [118, 282], d: [35, 215], z: [14, 21] };
+const perSide = H200.hbmStacks / 2;
+const STACK = { w: 56, gap: 8, layers: 4, z: [14, 30] as [number, number] };
+const stackD = (DIE.d[1] - DIE.d[0] - (perSide - 1) * STACK.gap) / perSide;
+const columns = [BASE.x[0] + 6, BASE.x[1] - 6 - STACK.w];
+const stacks = columns.map((x0) =>
+	Array.from({ length: perSide }, (_, i): Box => {
+		const d0 = DIE.d[0] + i * (stackD + STACK.gap);
+		return { x: [x0, x0 + STACK.w], d: [d0, d0 + stackD], z: STACK.z };
+	}).reverse(),
+);
+// Small parts along the substrate's front and back edges, as on a real package.
+const PARTS = Array.from({ length: 13 }, (_, i) => 74 + i * 20).flatMap((x): Box[] => [
+	{ x: [x, x + 9], d: [234, 240], z: [10, 13] },
+	{ x: [x, x + 9], d: [10, 16], z: [10, 13] },
+]);
+const gaps: [number, number][] = [
+	[columns[0] + STACK.w, DIE.x[0]],
+	[DIE.x[1], columns[1]],
+];
+
+const COLS = 12;
+const ROWS = Math.ceil(H200.sms / COLS);
+const M = 8;
+const pitchX = (DIE.x[1] - DIE.x[0] - 2 * M) / COLS;
+const pitchD = (DIE.d[1] - DIE.d[0] - 2 * M) / ROWS;
+const tileBox = (i: number): Box => {
+	const x0 = DIE.x[0] + M + (i % COLS) * pitchX + pitchX * 0.14;
+	const d0 = DIE.d[0] + M + Math.floor(i / COLS) * pitchD + pitchD * 0.14;
+	return { x: [x0, x0 + pitchX * 0.72], d: [d0, d0 + pitchD * 0.72], z: [DIE.z[1], DIE.z[1]] };
+};
+// The block the zoom follows: front row, next to the memory on the left.
+const PICKED = 0;
+const picked = tileBox(PICKED);
+const laneD = (picked.d[0] + picked.d[1]) / 2;
+const LANES = 7;
+const lanes = gaps.flatMap(([x0, x1]) =>
+	Array.from({ length: perSide * LANES }, (_, k) => {
+		const i = Math.floor(k / LANES);
+		const d = DIE.d[0] + i * (stackD + STACK.gap) + ((k % LANES) + 0.5) * (stackD / LANES);
+		return { x0, x1, d };
+	}).filter((l) => x0 !== gaps[0][0] || Math.abs(l.d - laneD) > 3),
+);
+
+type Layout = {
+	name: "wide" | "narrow";
+	w: number;
+	h: number;
+	server: [number, number, number];
+	pkg: [number, number, number];
+	panel: { x: number; y: number; w: number; h: number; lead: number };
+};
+const LAYOUTS: Layout[] = [
+	{
+		name: "wide",
+		w: 760,
+		h: 580,
+		server: [165, 84, 1.1],
+		pkg: [125, 352, 1.05],
+		panel: { x: 160, y: 424, w: 440, h: 146, lead: 50 },
+	},
+	{
+		name: "narrow",
+		w: 320,
+		h: 490,
+		server: [12, 70, 0.76],
+		pkg: [19, 264, 0.58],
+		panel: { x: 4, y: 336, w: 312, h: 146, lead: 26 },
+	},
+];
+
+type Label = { x: number; y: number; lines: string[]; anchor?: "start" | "middle" | "end"; ink?: boolean };
+
+const scene = (L: Layout) => {
+	const sp = project(...L.server);
+	const pp = project(...L.pkg);
+	const mods = Array.from({ length: GPUS }, (_, i) => {
+		const b = modBox(i);
+		const fins = Array.from({ length: 5 }, (_, k) => {
+			const x = b.x[0] + 6 + k * 6;
+			return seg(sp(x, b.d[0] + 3, b.z[1]), sp(x, b.d[1] - 3, b.z[1]));
+		});
+		return { ...faces(sp, b), fins, picked: i === PICK };
+	});
+	const mb = modBox(PICK);
+	const sub = faces(pp, SUB);
+	const pkgTop = pp(SUB.x[0], SUB.d[1], SUB.z[1]);
+	const pkgRight = pp(SUB.x[1], SUB.d[1], SUB.z[1]);
+	const serverZoom = [
+		seg(sp(mb.x[0], mb.d[0], mb.z[0]), pkgTop),
+		seg(sp(mb.x[1], mb.d[0], mb.z[0]), pkgRight),
+	];
+
+	const stackShapes = stacks.map((col) =>
+		col.map((b) => {
+			const step = (b.z[1] - b.z[0]) / STACK.layers;
+			const layers = Array.from({ length: STACK.layers - 1 }, (_, k) => {
+				const z = b.z[0] + (k + 1) * step;
+				return poly([pp(b.x[0], b.d[0], z), pp(b.x[1], b.d[0], z), pp(b.x[1], b.d[1], z)]);
+			});
+			return { ...faces(pp, b), layers };
+		}),
+	);
+	const laneLines = lanes.map((l) => seg(pp(l.x0, l.d, BASE.z[1]), pp(l.x1, l.d, BASE.z[1])));
+	const travelLane = seg(pp(gaps[0][0], laneD, BASE.z[1]), pp(gaps[0][1], laneD, BASE.z[1]));
+	const tiles = Array.from({ length: H200.sms }, (_, i) => faces(pp, tileBox(i)).top);
+
+	const to = pp((picked.x[0] + picked.x[1]) / 2, laneD, DIE.z[1]);
+	const travel = { x: r1(to[0]), y: r1(to[1]) };
+
+	const P = L.panel;
+	const blockZoom = [
+		seg(pp(picked.x[0], picked.d[0], DIE.z[1]), [P.x, P.y]),
+		seg(pp(picked.x[1], picked.d[0], DIE.z[1]), [P.x + P.w, P.y]),
+	];
+	const cy = P.y + 72;
+	const cx0 = P.x + (P.w - (L.name === "wide" ? 310 : 290)) / 2 + P.lead;
+	const block = {
+		cy,
+		lead: seg([P.x + 10, cy], [cx0 - 4, cy]),
+		weight: cx0 + 22,
+		times: cx0 + 66,
+		work: cx0 + 110,
+		arrow: cx0 + 150,
+		ops: cx0 + 172,
+	};
+
+	const mid = (DIE.d[0] + DIE.d[1]) / 2;
+	const dieBack = pp((DIE.x[0] + DIE.x[1]) / 2, DIE.d[1], DIE.z[1]);
+	const laneMid = pp((gaps[0][0] + gaps[0][1]) / 2, laneD, BASE.z[1]);
+	const top = Math.min(pkgTop[1], pkgRight[1]);
+	const sTop = sp(0, BOARD.d[1], modBox(0).z[1]);
+	const funnelX = (serverZoom[0].x1 + serverZoom[1].x1 + pkgTop[0] + pkgRight[0]) / 4;
+	const labels: Label[] = [
+		{ x: L.server[0], y: sTop[1] - 14, lines: [`the server: ${GPUS} GPUs`] },
+		{ x: funnelX, y: top - 50, lines: ["one H200"], anchor: "middle", ink: true },
+		{ x: dieBack[0], y: top - 26, lines: [`${H200.sms} compute blocks`], anchor: "middle" },
+	];
+	const leaders = [seg([dieBack[0], top - 18], [dieBack[0], dieBack[1] - 3])];
+	const below = L.name === "wide" ? (blockZoom[0].x1 + P.x + P.w * 0.32) / 2 : P.x + P.w * 0.46;
+	labels.push({ x: below, y: P.y - 34, lines: ["the short, wide path"], anchor: "middle" });
+	leaders.push(seg([laneMid[0], P.y - 46], [laneMid[0], laneMid[1] + 3]));
+
+	if (L.name === "wide") {
+		const left = pp(columns[0] + 4, mid, STACK.z[1]);
+		const right = pp(columns[1] + STACK.w, mid, (STACK.z[0] + STACK.z[1]) / 2);
+		const lx = pp(SUB.x[0], mid, 0)[0] - 26;
+		const rx = pp(SUB.x[1], SUB.d[1], 0)[0] + 18;
+		const words = [`${perSide} memory`, "stacks"];
+		labels.push({ x: lx, y: left[1] - 8, lines: words, anchor: "end" });
+		labels.push({ x: rx, y: left[1] - 8, lines: words });
+		leaders.push(seg([lx + 6, left[1]], left), seg([rx - 6, left[1]], right));
+	} else {
+		for (const x of [columns[0] + STACK.w / 2, columns[1] + STACK.w / 2]) {
+			const a = pp(x, DIE.d[1], STACK.z[1]);
+			labels.push({ x: a[0], y: top - 8, lines: ["memory"], anchor: "middle" });
+			leaders.push(seg([a[0], top - 1], [a[0], a[1] - 2]));
+		}
+	}
+
+	return {
+		L,
+		board: faces(sp, BOARD),
+		mods,
+		serverZoom,
+		sub,
+		base: faces(pp, BASE),
+		parts: PARTS.map((b) => faces(pp, b)),
+		die: faces(pp, DIE),
+		stacks: stackShapes,
+		laneLines,
+		travelLane,
+		tiles,
+		travel,
+		blockZoom,
+		block,
+		labels,
+		leaders,
+	};
+};
+const scenes = LAYOUTS.map(scene);
+
+const label = `A server of ${GPUS} GPUs. Zoomed in, one H200: a die of ${H200.sms} compute blocks in the middle, with ${H200.hbmStacks} memory stacks beside it, ${perSide} on each side, joined to it by a short, wide path. Zoomed in again, one compute block: a weight, ${worked(W[0][0])}, arrives from memory, meets the token's working number ${worked(X[0])}, and is used for two operations, a multiply and an add.`;
+---
+
+<div class="zoom">
+	{
+		scenes.map(({ L, board, mods, serverZoom, sub, base, parts, die, stacks, laneLines, travelLane, tiles, travel, blockZoom, block, labels, leaders }) => (
+			<svg class={L.name} viewBox={`0 0 ${L.w} ${L.h}`} role="img" aria-label={label}>
+				<g class="box board">
+					<polygon class="side" points={board.side} />
+					<polygon class="front" points={board.front} />
+					<polygon class="top" points={board.top} />
+				</g>
+				{mods.map((m) => (
+					<g class:list={["box mod", { dim: !m.picked }]}>
+						<polygon class="side" points={m.side} />
+						<polygon class="front" points={m.front} />
+						<polygon class="top" points={m.top} />
+						{m.fins.map((f) => (
+							<line class="fin" {...f} />
+						))}
+					</g>
+				))}
+
+				<g class="box">
+					<polygon class="side" points={sub.side} />
+					<polygon class="front" points={sub.front} />
+					<polygon class="top" points={sub.top} />
+				</g>
+				{parts.map((b) => (
+					<g class="box part">
+						<polygon class="side" points={b.side} />
+						<polygon class="front" points={b.front} />
+						<polygon class="top" points={b.top} />
+					</g>
+				))}
+				<g class="box base">
+					<polygon class="side" points={base.side} />
+					<polygon class="front" points={base.front} />
+					<polygon class="top" points={base.top} />
+				</g>
+				{laneLines.map((l) => (
+					<line class="lane" {...l} />
+				))}
+				<line class="lane hot" {...travelLane} />
+				{stacks[0].map((s) => (
+					<g class="box stack">
+						<polygon class="side" points={s.side} />
+						<polygon class="front" points={s.front} />
+						<polygon class="top" points={s.top} />
+						{s.layers.map((p) => (
+							<polyline class="layer" points={p} />
+						))}
+					</g>
+				))}
+				<g class="box die">
+					<polygon class="side" points={die.side} />
+					<polygon class="front" points={die.front} />
+					<polygon class="top" points={die.top} />
+				</g>
+				{tiles.map((t, i) => (
+					<polygon class:list={["sm", { picked: i === PICKED }]} points={t} />
+				))}
+				{stacks[1].map((s) => (
+					<g class="box stack">
+						<polygon class="side" points={s.side} />
+						<polygon class="front" points={s.front} />
+						<polygon class="top" points={s.top} />
+						{s.layers.map((p) => (
+							<polyline class="layer" points={p} />
+						))}
+					</g>
+				))}
+				<g transform={`translate(${travel.x} ${travel.y})`}>
+					<rect class="w" x="-3.5" y="-3.5" width="7" height="7" />
+				</g>
+
+				{[...serverZoom, ...blockZoom].map((z) => (
+					<line class="zl" {...z} />
+				))}
+				{leaders.map((l) => (
+					<line class="leader" {...l} />
+				))}
+				{labels.map((t) => (
+					<text class:list={["lbl", { ink: t.ink }]} x={t.x} y={t.y} text-anchor={t.anchor ?? "start"}>
+						{t.lines.map((line, i) => (
+							<tspan x={t.x} dy={i === 0 ? 0 : "1.25em"}>
+								{line}
+							</tspan>
+						))}
+					</text>
+				))}
+
+				<rect class="card" x={L.panel.x} y={L.panel.y} width={L.panel.w} height={L.panel.h} rx="6" />
+				<text class="ink" x={L.panel.x + 14} y={L.panel.y + 18}>
+					one compute block
+				</text>
+				<line class="lead" {...block.lead} />
+				<rect class="w" x={block.weight - 22} y={block.cy - 22} width="44" height="44" />
+				<text class="v mid w-ink" x={block.weight} y={block.cy}>
+					{worked(W[0][0])}
+				</text>
+				<text class="mid" x={block.times} y={block.cy}>
+					×
+				</text>
+				<rect class="x" x={block.work - 22} y={block.cy - 22} width="44" height="44" />
+				<text class="v mid ink" x={block.work} y={block.cy}>
+					{worked(X[0])}
+				</text>
+				<text class="mid" x={block.arrow} y={block.cy}>
+					→
+				</text>
+				<circle class="op" cx={block.ops} cy={block.cy - 11} r="5" />
+				<text x={block.ops + 13} y={block.cy - 11}>
+					multiply
+				</text>
+				<circle class="op" cx={block.ops} cy={block.cy + 11} r="5" />
+				<text x={block.ops + 13} y={block.cy + 11}>
+					add
+				</text>
+				<text class="mid" x={block.weight} y={block.cy + 38}>
+					<tspan x={block.weight}>a weight</tspan>
+					<tspan x={block.weight} dy="1.25em">
+						from memory
+					</tspan>
+				</text>
+				<text class="mid" x={block.work} y={block.cy + 38}>
+					<tspan x={block.work}>working</tspan>
+					<tspan x={block.work} dy="1.25em">
+						number
+					</tspan>
+				</text>
+			</svg>
+		))
+	}
+</div>
+
+<style>
+	.zoom {
+		container-type: inline-size;
+		--lit: var(--paper);
+		--shade: color-mix(in oklab, var(--ink) 9%, var(--paper));
+		--shadow: color-mix(in oklab, var(--ink) 16%, var(--paper));
+	}
+	/* On a dark page the lit faces are the lighter ones, so the shading runs the other way. */
+	:global([data-theme="dark"]) .zoom {
+		--lit: color-mix(in oklab, var(--ink) 9%, var(--paper-2));
+		--shade: color-mix(in oklab, var(--ink) 3%, var(--paper));
+		--shadow: var(--paper);
+	}
+	svg {
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+	.wide {
+		display: none;
+	}
+	@container (min-width: 34rem) {
+		.wide {
+			display: block;
+		}
+		.narrow {
+			display: none;
+		}
+	}
+	text {
+		font-family: var(--mono);
+		font-size: 13px;
+		dominant-baseline: central;
+		fill: var(--ink-2);
+	}
+	.lbl {
+		paint-order: stroke;
+		stroke: var(--paper-2);
+		stroke-width: 4px;
+		stroke-linejoin: round;
+	}
+	.mid {
+		text-anchor: middle;
+	}
+	.ink {
+		fill: var(--ink);
+	}
+	.v {
+		font-size: 15px;
+		font-variant-numeric: tabular-nums;
+	}
+	.box polygon {
+		stroke: var(--ink);
+		stroke-width: 0.9;
+		stroke-linejoin: round;
+	}
+	.top {
+		fill: var(--lit);
+	}
+	.side {
+		fill: var(--shade);
+	}
+	.front {
+		fill: var(--shadow);
+	}
+	.base .top {
+		fill: color-mix(in oklab, var(--shade) 50%, var(--lit));
+	}
+	.die .top {
+		fill: var(--shadow);
+	}
+	.stack .top {
+		fill: color-mix(in oklab, var(--shade) 70%, var(--lit));
+	}
+	.part polygon {
+		stroke: var(--ink-2);
+		stroke-width: 0.5;
+	}
+	.layer,
+	.fin {
+		fill: none;
+		stroke: var(--ink-2);
+		stroke-width: 0.6;
+	}
+	.mod.dim polygon {
+		stroke: var(--ink-2);
+		stroke-width: 0.6;
+	}
+	.mod.dim .fin {
+		stroke: var(--rule);
+	}
+	.mod:not(.dim) polygon {
+		stroke-width: 1.4;
+	}
+	.mod:not(.dim) .top {
+		fill: color-mix(in oklab, var(--ink) 22%, var(--lit));
+	}
+	.lane {
+		stroke: var(--ink-2);
+		stroke-width: 0.7;
+	}
+	.lane.hot {
+		stroke: var(--bytes);
+		stroke-width: 1.4;
+	}
+	.sm {
+		fill: var(--lit);
+		stroke: var(--ink-2);
+		stroke-width: 0.5;
+	}
+	.sm.picked {
+		fill: var(--ink);
+		stroke: var(--ink);
+	}
+	.zl {
+		stroke: var(--ink-2);
+		stroke-width: 1;
+		stroke-dasharray: 4 3;
+	}
+	.leader {
+		stroke: var(--ink-2);
+		stroke-width: 0.75;
+	}
+	.card {
+		fill: var(--paper);
+		stroke: var(--ink);
+		stroke-width: 1.25;
+	}
+	.w {
+		fill: var(--bytes-wash);
+		stroke: var(--bytes);
+		stroke-width: 1.5;
+	}
+	.w-ink {
+		fill: var(--bytes-ink);
+	}
+	.x {
+		fill: none;
+		stroke: var(--ink);
+		stroke-width: 1.25;
+	}
+	.lead {
+		stroke: var(--bytes);
+		stroke-width: 1.5;
+		stroke-dasharray: 2 3;
+	}
+	.op {
+		fill: var(--math);
+	}
+</style>

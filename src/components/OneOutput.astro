@@ -1,0 +1,202 @@
+---
+// One output of the toy projection worked by hand, as a strip of three frames of the same drawing:
+// pair each number with its weight, multiply each pair, add the products.
+import { twoPlaces, worked } from "../lib/format";
+import { output, products, W, X } from "../lib/toy";
+
+const ROW = 0;
+const w = W[ROW];
+const p = products(ROW);
+const y = output(ROW);
+const COLS = [25, 75, 125, 175];
+const LEFT = 4;
+const RIGHT = 200;
+// Each frame is cropped below its lowest row, so the strip stays short when the frames stack.
+const HEIGHTS = [92, 134, 164];
+const FRAMES = [
+	{
+		step: 1,
+		title: "pair them up",
+		label: `each number meets its weight: ${X.map((x, i) => `${worked(x)} and ${worked(w[i])}`).join(", ")}`,
+	},
+	{ step: 2, title: "multiply each pair", label: `multiply each pair: ${p.map(worked).join(", ")}` },
+	{
+		step: 3,
+		title: "add the products",
+		label: `add the products: ${p.map(worked).join(" + ")} = ${worked(y)}`,
+	},
+];
+---
+
+<div class="one">
+<p class="key">
+	<span><i class="obj-work" aria-hidden="true"></i> the token's numbers</span>
+	<span><i class="obj-weight" aria-hidden="true"></i> weights</span>
+	<span><i class="obj-op" aria-hidden="true"></i> arithmetic</span>
+</p>
+<ol class="strip">
+	{
+		FRAMES.map(({ step, title, label }) => (
+			<li class="frame">
+				<p class="title">
+					<span class="step">{step}</span> {title}
+				</p>
+				<svg viewBox={`0 0 204 ${HEIGHTS[step - 1]}`} role="img" aria-label={label}>
+					<g class:list={{ dim: step === 3 }}>
+						{COLS.map((cx, i) => (
+							<g>
+								<rect class="in" x={cx - 19} y="14" width="38" height="26" />
+								<text class="v mid" x={cx} y="27">
+									{worked(X[i])}
+								</text>
+								<text class="op mid" x={cx} y="50">
+									×
+								</text>
+								<rect class="w" x={cx - 19} y="60" width="38" height="26" />
+								<text class="v mid w-ink" x={cx} y="73">
+									{worked(w[i])}
+								</text>
+							</g>
+						))}
+					</g>
+
+					{step >= 2 && (
+						<g>
+							{COLS.map((cx, i) => (
+								<g>
+									<circle class="p" cx={cx} cy="104" r="4.5" />
+									<text class="v mid p-ink" x={cx} y="122">
+										{twoPlaces(p[i])}
+									</text>
+								</g>
+							))}
+						</g>
+					)}
+
+					{step === 3 && (
+						<g>
+							{COLS.slice(1).map((cx) => (
+								<text class="op mid" x={cx - 25} y="122">
+									+
+								</text>
+							))}
+							<line class="rule" x1={LEFT} y1="138" x2={RIGHT} y2="138" />
+							<text class="lbl" x={LEFT} y="153">
+								output
+							</text>
+							<text class="v big end" x={RIGHT} y="153">
+								{twoPlaces(y)}
+							</text>
+						</g>
+					)}
+				</svg>
+			</li>
+		))
+	}
+</ol>
+</div>
+
+<style>
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 0.375rem 1.25rem;
+		margin: 0 0 1.25rem;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.key span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.key i {
+		--obj: 0.875rem;
+	}
+	.strip {
+		display: grid;
+		grid-template-columns: minmax(0, 14rem);
+		align-items: start;
+		justify-content: center;
+		gap: 1.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	@media (min-width: 46rem) {
+		.strip {
+			grid-template-columns: repeat(3, minmax(0, 14rem));
+		}
+	}
+	.frame {
+		display: grid;
+		gap: 0.375rem;
+	}
+	.title {
+		margin: 0;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink);
+	}
+	.step {
+		display: inline-grid;
+		place-items: center;
+		width: 1.25rem;
+		height: 1.25rem;
+		margin-right: 0.25rem;
+		border: 1px solid var(--rule);
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	svg {
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+	text {
+		font-family: var(--mono);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+		dominant-baseline: central;
+		fill: var(--ink);
+	}
+	.v {
+		font-size: 12px;
+	}
+	.mid {
+		text-anchor: middle;
+	}
+	.end {
+		text-anchor: end;
+	}
+	.op,
+	.lbl {
+		fill: var(--ink-2);
+	}
+	.in {
+		fill: none;
+		stroke: var(--ink);
+		stroke-width: 1.25;
+	}
+	.w {
+		fill: var(--bytes-wash);
+		stroke: var(--bytes);
+		stroke-width: 1.5;
+	}
+	.w-ink {
+		fill: var(--bytes-ink);
+	}
+	.p {
+		fill: var(--math);
+	}
+	.p-ink {
+		fill: var(--math-ink);
+	}
+	.rule {
+		stroke: var(--ink);
+		stroke-width: 1.25;
+	}
+	.big {
+		font-size: 15px;
+	}
+</style>

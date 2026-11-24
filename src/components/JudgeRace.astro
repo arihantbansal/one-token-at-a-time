@@ -1,0 +1,243 @@
+---
+// How the judge times one shape: ten pairs of runs, the order swapped from pair to pair, every
+// run started cold. With ten speedups, the median is the average of the middle two.
+import { times } from "../lib/format";
+import { FIRST_SEED, FLUSH_WIDTH, race, report, type Who } from "../lib/judgeRace";
+import Readout from "./Readout.astro";
+
+const SPEED = 1.6;
+const first = race(FIRST_SEED, SPEED);
+const firstReport = report(
+	first.rows.map((r) => r.ratio),
+	SPEED,
+);
+---
+
+<okc-judge-race class="figure-mono" data-speed={SPEED}>
+	<p class="illustration">an illustration: an entry {times(SPEED)} faster than SGLang, timed with made-up noise</p>
+
+	<p class="key" aria-hidden="true">
+		<span><i class="swatch theirs"></i>sglang</span>
+		<span><i class="swatch yours"></i>entry</span>
+		<span><i class="swatch flush"></i>cache flush</span>
+		<span><i class="swatch slow"></i>slow run</span>
+		<span><i class="swatch middle"></i>middle two</span>
+	</p>
+
+	<ol class="rows" aria-label="Ten pairs of timed runs, each with its speedup">
+		{
+			first.rows.map((row, i) => {
+				const order: Who[] = i % 2 === 0 ? ["theirs", "yours"] : ["yours", "theirs"];
+				return (
+					<li class:list={["row", { median: first.middle.includes(i) }]}>
+						<span class="n">{String(i + 1).padStart(2, "0")}</span>
+						<span class="track">
+							{order.map((who) => (
+								<>
+									<span class="flush" aria-hidden="true" style={`width: ${FLUSH_WIDTH}`} />
+									<span
+										class:list={["bar", who, { slow: row.runs[who].slow }]}
+										style={`width: ${row.runs[who].width}`}
+									>
+										{who === "theirs" ? "sglang" : "entry"}
+									</span>
+								</>
+							))}
+						</span>
+						<span class="ratio">{times(row.ratio)}</span>
+						<span class="tag">middle</span>
+					</li>
+				);
+			})
+		}
+	</ol>
+
+	<Readout
+		items={[
+			{ key: "measured", label: "median the judge reports", value: firstReport.measured },
+			{ key: "real", label: "true speedup", value: times(SPEED) },
+			{ key: "error", label: "off by", value: firstReport.error },
+		]}
+	/>
+
+	<p class="visually-hidden" aria-live="polite" data-status></p>
+	<div class="controls"><button class="btn" type="button" data-again>Race again</button></div>
+</okc-judge-race>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+	import { FIRST_SEED, race, report, type Who } from "../lib/judgeRace";
+	import { times } from "../lib/format";
+
+	const ROW_MS = 160;
+	const FADE_MS = 240;
+	const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
+	class JudgeRace extends FigureElement {
+		private seed = FIRST_SEED;
+		private rows: HTMLElement[] = [];
+		private announce = false;
+
+		setup() {
+			this.rows = [...this.querySelectorAll<HTMLElement>(".row")];
+			this.on(this.$("[data-again]"), "click", () => {
+				this.seed++;
+				this.announce = true;
+				this.race();
+			});
+			this.whenVisible(() => this.race());
+		}
+
+		/** Rows fade in one after another; the readout follows the rows shown so far. */
+		race() {
+			const speed = this.num("speed");
+			const { rows, middle } = race(this.seed, speed);
+			const total = this.rows.length * ROW_MS + FADE_MS;
+			this.tween(total, (progress) => {
+				const done = progress >= 1;
+				const shown: number[] = [];
+				this.rows.forEach((row, i) => {
+					const t = done ? 1 : clamp01((progress * total - i * ROW_MS) / FADE_MS);
+					if (t > 0.5) shown.push(rows[i].ratio);
+					row.style.opacity = String(t);
+					row.style.transform = `translateX(${(1 - t) * -0.5}rem)`;
+					row.classList.toggle("median", done && middle.includes(i));
+					this.$(".ratio", row).textContent = times(rows[i].ratio);
+					for (const bar of row.querySelectorAll<HTMLElement>(".bar")) {
+						const who: Who = bar.classList.contains("theirs") ? "theirs" : "yours";
+						const run = rows[i].runs[who];
+						bar.style.width = run.width;
+						bar.classList.toggle("slow", run.slow);
+					}
+				});
+				const r = report(shown.length ? shown : rows.map((x) => x.ratio), speed);
+				this.out("measured", r.measured);
+				this.out("error", r.error);
+				if (done && this.announce)
+					this.$("[data-status]").textContent = `The judge reports ${r.measured}, off by ${r.error}.`;
+			});
+		}
+	}
+
+	define("okc-judge-race", JudgeRace);
+</script>
+
+<style>
+	.illustration {
+		margin: 0;
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem 1rem;
+		margin: 0.75rem 0 1rem;
+		font-size: 0.6875rem;
+		color: var(--ink-2);
+	}
+	.key span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.swatch {
+		display: inline-block;
+		width: 1rem;
+		height: 0.75rem;
+	}
+	.theirs {
+		background: var(--ink-2);
+	}
+	.yours {
+		background: var(--ink);
+	}
+	.flush {
+		background: repeating-linear-gradient(135deg, var(--ink-2) 0 1.5px, transparent 1.5px 4.5px);
+		box-shadow: inset 0 0 0 1px var(--ink-2);
+	}
+	.slow {
+		outline: 1.5px dashed var(--ink);
+		outline-offset: 2px;
+	}
+	.swatch.slow {
+		width: 0.75rem;
+		height: 0.5rem;
+		margin: 0 2px;
+	}
+	.swatch.middle {
+		border: 1px solid var(--ink);
+	}
+	.rows {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 0.375rem;
+	}
+	.row {
+		position: relative;
+		display: grid;
+		grid-template-columns: 1.5rem minmax(0, 1fr) 3.25rem;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.25rem;
+		border: 1px solid transparent;
+		transition: border-color var(--fast) var(--ease);
+	}
+	.row.median {
+		border-color: var(--ink);
+	}
+	.tag {
+		position: absolute;
+		top: -0.5rem;
+		right: 0.5rem;
+		padding: 0 0.25rem;
+		font-size: 0.625rem;
+		line-height: 1rem;
+		color: var(--ink);
+		background: var(--paper);
+		visibility: hidden;
+	}
+	.median .tag {
+		visibility: visible;
+	}
+	.n {
+		color: var(--ink-2);
+	}
+	.track {
+		container-type: inline-size;
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 3px;
+	}
+	.track .flush {
+		flex: none;
+		height: 1.25rem;
+		min-width: 4px;
+	}
+	.bar {
+		flex: none;
+		height: 1.25rem;
+		line-height: 1.25rem;
+		padding: 0 0.25rem;
+		overflow: hidden;
+		white-space: nowrap;
+		font-size: 0.625rem;
+		color: var(--paper);
+		transition: width var(--slow) var(--ease);
+	}
+	@container (max-width: 15rem) {
+		.bar {
+			color: transparent;
+		}
+	}
+	.ratio {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	.controls {
+		margin-top: 0.5rem;
+	}
+</style>

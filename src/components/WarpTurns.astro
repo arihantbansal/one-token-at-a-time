@@ -1,0 +1,139 @@
+---
+// One compute block's turns, slot by slot: each warp does one step of arithmetic, then waits for
+// its next data. With one warp the arithmetic sits idle while it waits; with four, another warp
+// always has its data. Slot lengths are illustrative: a real wait is hundreds of cycles.
+const SLOTS = 16;
+const WAIT = 3;
+
+type Cell = "math" | "wait" | "ready" | "none";
+function run(warps: number) {
+	const readyAt = Array.from({ length: warps }, () => 0);
+	const rows: Cell[][] = Array.from({ length: warps }, () => []);
+	const unit: boolean[] = [];
+	for (let t = 0; t < SLOTS; t++) {
+		const turn = readyAt.findIndex((r) => r <= t);
+		unit.push(turn >= 0);
+		readyAt.forEach((r, w) => {
+			rows[w].push(w === turn ? "math" : r > t ? "wait" : "ready");
+		});
+		if (turn >= 0) readyAt[turn] = t + 1 + WAIT;
+	}
+	return { rows, unit, busy: unit.filter(Boolean).length };
+}
+const PANELS = [1, 4].map((warps) => ({ warps, ...run(warps) }));
+const MARK: Record<Cell, string> = { math: "●", wait: "■", ready: "", none: "" };
+---
+
+<div class="warps">
+	<p class="key" aria-hidden="true">
+		<span><b class="math">●</b> arithmetic</span>
+		<span><b class="bytes">■</b> waiting for data</span>
+		<span><b class="ready"></b> ready, waiting its turn</span>
+	</p>
+	{
+		PANELS.map((p) => (
+			<section>
+				<h3>{p.warps === 1 ? "one warp" : "four warps"}</h3>
+				<div
+					class="rows"
+					role="img"
+					aria-label={`${p.warps === 1 ? "One warp" : "Four warps"}: the arithmetic is busy in ${p.busy} of ${SLOTS} turns`}
+				>
+					{p.rows.map((row, w) => (
+						<div class="row">
+							<span class="name">warp {w}</span>
+							{row.map((c) => (
+								<i class={c}>{MARK[c]}</i>
+							))}
+						</div>
+					))}
+					<div class="row unit">
+						<span class="name">arithmetic</span>
+						{p.unit.map((on) => (
+							<i class={on ? "math" : "none"}>{on ? "●" : ""}</i>
+						))}
+					</div>
+				</div>
+				<p class="busy">
+					busy in {p.busy} of {SLOTS} turns
+				</p>
+			</section>
+		))
+	}
+</div>
+
+<style>
+	.warps {
+		display: grid;
+		gap: 1.5rem;
+		max-width: 34rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1.25rem;
+	}
+	.key b {
+		font-weight: inherit;
+	}
+	.key .ready {
+		display: inline-block;
+		width: 0.7rem;
+		height: 0.7rem;
+		border: 1px solid var(--rule);
+		vertical-align: -0.05rem;
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	.rows {
+		display: grid;
+		gap: 2px;
+	}
+	.row {
+		display: grid;
+		grid-template-columns: 5.5rem repeat(16, minmax(0, 1fr));
+		gap: 2px;
+		align-items: center;
+	}
+	.unit {
+		margin-top: 0.375rem;
+		color: var(--ink);
+	}
+	i {
+		display: grid;
+		place-items: center;
+		height: 1.125rem;
+		font-style: normal;
+		font-size: 0.6875rem;
+		line-height: 1;
+	}
+	.math {
+		color: var(--math);
+	}
+	.bytes,
+	.wait {
+		color: var(--bytes);
+	}
+	.wait {
+		background: var(--bytes-wash);
+	}
+	.ready {
+		border: 1px solid var(--rule);
+	}
+	.none {
+		border: 1px dashed var(--rule);
+	}
+	.busy {
+		margin-top: 0.5rem;
+		text-align: right;
+	}
+</style>

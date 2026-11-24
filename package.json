@@ -1,0 +1,36 @@
+{
+	"name": "one-token-at-a-time",
+	"private": true,
+	"type": "module",
+	"version": "0.0.1",
+	"packageManager": "bun@1.4.2",
+	"engines": {
+		"node": "24.x"
+	},
+	"scripts": {
+		"dev": "astro dev",
+		"open": "sh scripts/guide.sh open",
+		"close": "sh scripts/guide.sh close",
+		"build": "astro build && bun scripts/check-site.ts",
+		"preview": "astro preview",
+		"astro": "astro",
+		"snapshot": "bun scripts/snapshot.ts",
+		"test": "vitest run",
+		"check": "astro check && biome check . && vitest run",
+		"verify": "bun run check && bun run build",
+		"format": "biome check --write ."
+	},
+	"dependencies": {
+		"@astrojs/markdown-satteri": "^0.4.10",
+		"@astrojs/mdx": "^8.1.1",
+		"@fontsource-variable/source-serif-4": "^5.3.1",
+		"astro": "^7.4.2"
+	},
+	"devDependencies": {
+		"@astrojs/check": "^0.9.12",
+		"@biomejs/biome": "^2.6.3",
+		"@types/bun": "^1.4.4",
+		"typescript": "6",
+		"vitest": "^5.0.5"
+	}
+}

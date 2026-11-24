@@ -1,0 +1,28 @@
+---
+import Figure from "../components/Figure.astro";
+import OutOfMemory from "../components/OutOfMemory.astro";
+import Route from "../components/Route.astro";
+import Base from "../layouts/Base.astro";
+---
+
+<Base title="Page not found" description="This page is not part of the guide." slug="404">
+	<article class="article">
+		<header class="page-head">
+			<p class="meta">404 · not found</p>
+			<h1>Page not found</h1>
+			<p class="lede">This page isn't part of the guide. Every chapter is listed below the game.</p>
+		</header>
+		<p>
+			While you're here, you're the server. Let people into the batch so every pass writes more tokens,
+			but leave room for the replies still growing, or you'll run out of memory.
+		</p>
+		<Figure label="out of memory">
+			<OutOfMemory />
+		</Figure>
+		<p>
+			Sizes are scaled down, and a real server pauses or recomputes whoever it evicts. It doesn't know
+			how long a reply will run either. <a href="/batching">Chapter 8</a> has the real trade at full size.
+		</p>
+		<Route />
+	</article>
+</Base>

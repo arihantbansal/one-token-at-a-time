@@ -1,0 +1,219 @@
+---
+layout: ../layouts/Stop.astro
+slug: batching
+description: Why a server answers many people in one pass, what they share and what they don't, how batched projections use tensor cores via tl.dot, and why each person's tokens slow down as the batch grows.
+---
+
+import BatchPass from "../components/BatchPass.astro";
+import Deeper from "../components/Deeper.astro";
+import Figure from "../components/Figure.astro";
+import InTheChallenge from "../components/InTheChallenge.astro";
+import KernelCode from "../components/KernelCode.astro";
+import Key from "../components/Key.astro";
+import KvPeople from "../components/KvPeople.astro";
+import MemoryRoom from "../components/MemoryRoom.astro";
+import PassBill from "../components/PassBill.astro";
+import Predict from "../components/Predict.astro";
+import RouterGrid from "../components/RouterGrid.astro";
+import SharedRead from "../components/SharedRead.astro";
+import Term from "../components/Term.astro";
+import TiledProjection from "../components/TiledProjection.astro";
+import TippingPoint from "../components/TippingPoint.astro";
+import { decodeThroughput } from "../lib/challenge";
+import { bytes, count, microseconds, percent, times } from "../lib/format";
+import {
+	BALANCE_POINT,
+	CONTEXT_TOKENS,
+	EXPERT_BYTES,
+	FP32_BALANCE_POINT,
+	GPUS,
+	H200,
+	LAYERS,
+	LOCAL_EXPERTS,
+	PROJECTIONS,
+	SLICED_MAX_TOKENS,
+	SLIDING_WINDOW,
+	getProjection,
+	kvBytes,
+	weightBytes,
+	weightBytesPerGpu,
+} from "../lib/model";
+import { routing } from "../lib/routing";
+import {
+	LENGTH_SPREAD,
+	billLines,
+	conversationsThatFit,
+	fullLayerCacheBytes,
+	passBill,
+} from "../lib/serving";
+import { W } from "../lib/toy";
+
+export const balance = Math.round(BALANCE_POINT);
+export const fp32Balance = Math.round(FP32_BALANCE_POINT);
+export const perWeight = Math.round(BALANCE_POINT * 2);
+export const toyWeights = W.length * W[0].length;
+export const pooler = getProjection("pooler");
+export const poolerRidge = Math.round(
+	weightBytes(pooler, 1) /
+		((2 * pooler.rows * pooler.cols) / BALANCE_POINT - (pooler.cols * 2 + pooler.rows * 2)),
+);
+export const solo = decodeThroughput(1);
+export const many = decodeThroughput(32);
+export const one = billLines(1);
+export const thirtyTwo = billLines(32);
+export const line = (bill, key) => bill.lines.find((l) => l.key === key).us;
+export const grew = (key) => line(thirtyTwo, key) / line(one, key);
+export const fullCache32 = 32 * kvBytes(CONTEXT_TOKENS, "full");
+export const slidingCachePerConv = LAYERS.sliding * kvBytes(CONTEXT_TOKENS, "sliding");
+export const perConvCacheBytes = fullLayerCacheBytes(CONTEXT_TOKENS) + slidingCachePerConv;
+export const activeCache32 = 32 * perConvCacheBytes;
+export const conversationsBothCaches = Math.floor((H200.memoryGB * 1e9 - weightBytesPerGpu) / perConvCacheBytes);
+export const layerWeights32 = PROJECTIONS.reduce((sum, p) => sum + weightBytes(p, 32), 0);
+export const shortest = CONTEXT_TOKENS * (1 - LENGTH_SPREAD);
+export const longest = CONTEXT_TOKENS * (1 + LENGTH_SPREAD);
+export const spreadPercent = (LENGTH_SPREAD * 100).toFixed(1);
+export const routeOne = routing(1);
+export const routeMany = routing(32);
+export const tensorOverCuda = Math.round(H200.flopsPerSecond / H200.fp32FlopsPerSecond);
+
+export const dotSnippet = [
+	{
+		code: "acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)",
+		note: "A 2D tile of accumulators: BLOCK_M tokens by BLOCK_N output rows.",
+	},
+	{
+		code: "for k in range(0, K, BLOCK_K):",
+		note: "Walk along the input dimension, reusing every loaded weight across all BLOCK_M tokens.",
+	},
+	{
+		code: "    x = tl.load(...)   # (BLOCK_M, BLOCK_K) in BF16",
+		note: "A tile of multiple tokens' activations.",
+		kind: "bytes",
+	},
+	{
+		code: "    w = tl.load(...)   # (BLOCK_K, BLOCK_N) in BF16",
+		note: "The weight tile, fetched once from HBM and shared by every token in the tile.",
+		kind: "bytes",
+	},
+	{
+		code: "    acc += tl.dot(x, w)",
+		note: `Dispatches to BF16 tensor cores (${count(H200.flopsPerSecond / 1e12)} TFLOPS) instead of scalar FP32 CUDA cores (${count(H200.fp32FlopsPerSecond / 1e12)} TFLOPS).`,
+		kind: "math",
+	},
+];
+
+Because every user on a server runs the same model weights, a second person's token can ride through a dense projection without reading an extra weight from HBM. At peak bandwidth, each 16-bit weight arriving on chip leaves time for about {perWeight} tensor-core operations, and a single token uses 2. Running another user's token against that same weight adds almost only arithmetic. Experts are the exception, because a second token may choose experts the first one did not.
+
+## Twelve weights, many tokens
+
+Send several tokens through the twelve-weight projection in one pass and count memory reads against multiplications.
+
+<Figure surface="paper" label="one read, many tokens">
+	<Fragment slot="caption">Each square is a <Key as="bytes">weight read from memory</Key>; each dot inside it is one <Key as="math">multiplication</Key>.</Fragment>
+	<SharedRead />
+</Figure>
+
+Weight reads stay at {toyWeights} whether the pass carries 1, 4, or 16 tokens, while multiplications grow from {toyWeights} to {count(toyWeights * 4)} to {count(toyWeights * 16)}. The shape of the work changes too: one token multiplies a matrix by a vector (<Term id="gemv">GEMV</Term>), whereas several tokens multiply a matrix by a matrix (<Term id="gemm">GEMM</Term>), the 2D tile shape <Term id="tensorCore">tensor cores</Term> were built for. Tokens traveling through the model together form a <Term id="batch">batch</Term>, which is how a server puts idle arithmetic to work.
+
+What else does a batch share? Follow four people through one step of a pass.
+
+<Figure surface="paper" label="one step, four people">
+	<BatchPass />
+</Figure>
+
+Nothing besides the weights. One read of the twelve weights served all four people, while each brought private working numbers, produced private outputs, and kept a separate KV cache.
+
+<Deeper title="What changes inside a batched kernel (and why tl.dot matters)">
+	<p>
+		Inside a batched kernel, each program owns a 2D tile of outputs: <code>BLOCK_M</code> tokens by <code>BLOCK_N</code> rows. Every weight tile fetched from HBM is reused across all <code>BLOCK_M</code> tokens in registers and shared memory. Here is program 2 of the toy reusing row 2 across two tokens:
+	</p>
+	<TiledProjection show={["reuse"]} />
+	<p>
+		One line also reaches the H200's ~{tensorOverCuda}× tensor-core speedup: Kernel 1's single-token <code>tl.sum(w.to(tl.float32) * x.to(tl.float32))</code> runs on scalar FP32 CUDA cores (~{count(H200.fp32FlopsPerSecond / 1e12)} TFLOPS), which hit their compute ceiling around {fp32Balance} tokens. Replacing that elementwise multiply with <code>tl.dot(x, w)</code> over 2D BF16 tiles dispatches to the {count(H200.flopsPerSecond / 1e12)} TFLOPS tensor cores. Triton's <a href="https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html">Matrix Multiplication tutorial</a> walks through the full GEMM kernel, including L2 cache swizzling.
+	</p>
+	<KernelCode lines={dotSnippet} title="the inner loop of a batched GEMM" />
+</Deeper>
+
+## When arithmetic catches up
+
+Each extra token in a batch adds two operations per weight (1 operation per byte for 16-bit weights), climbing along the <Term id="roofline">roofline</Term> toward the chip's balance point. How far can a batch grow before arithmetic overtakes bandwidth?
+
+<Predict question="A server batches 16 people's tokens through the layer's largest projection (`pooler`) in one pass. Compared with one person, how much more data does it read, and how much more arithmetic does it do? On tensor cores, is the chip still waiting on memory?">
+	<p>Weight reads stay at {bytes(weightBytes(pooler, 16))}, with only a small slice added for 16 tokens' activations, while arithmetic grows 16×.</p>
+	<p>On tensor cores, the chip is still memory-bound: 16 operations per byte sits far short of the {balance}-op/byte tensor-core ridge, so 16 people cost barely more ideal time than 1. On scalar FP32 CUDA cores, by contrast, 16 tokens already pass the {fp32Balance}-op/byte ridge.</p>
+</Predict>
+
+Both bars below are ideal lower bounds at rated H200 speeds, comparing tensor cores against FP32 CUDA cores.
+
+<Figure label="the tipping point">
+	<TippingPoint />
+</Figure>
+
+On tensor cores, moving data barely grows while arithmetic climbs linearly, crossing the weight-only balance point at ~{balance} tokens (and ~{poolerRidge} tokens once `pooler`'s input and output activations are included). A 32-person decode batch stays well below that ridge, so inside dense projections 32 people take little more ideal time than one.
+
+## Faster in total, slower for each
+
+If dense projections barely slow down from 1 person to 32, batching sounds nearly free. Yet look at ideal pass speeds across the whole model: solo, one person gets about {count(solo.each)} tokens a second; at 32 people, the server produces about {count(many.total)} tokens a second in total ({times(many.total / solo.total, 0)} as many), while each individual drops to about {count(many.each)}, roughly {percent(many.each / solo.each)} of solo speed. If shared weights barely grew, what slowed each person down?
+
+The itemized memory bill for one pass at 1 person versus 32 shows where the time went.
+
+<Figure surface="paper" label="the bill for one pass">
+	<Fragment slot="caption">Each bar is the time to move one category of bytes at peak H200 bandwidth. <Key as="math">Arithmetic</Key> finishes sooner at both batch sizes, so data movement sets both floors.</Fragment>
+	<PassBill people={[1, 32]} />
+</Figure>
+
+Shared projection weights grew modestly, from {microseconds(line(one, "weights"))} to {microseconds(line(thirtyTwo, "weights"))}. By contrast, KV caches grew {count(grew("cache"))}-fold (just under 32× because the batched floor uses the shortest average length allowed by the contest's ±{spreadPercent}% spread) and expert weights grew {times(grew("experts"), 1)}. Private caches and sparsely shared experts, not shared projections, are what slow each person down as a batch grows.
+
+<Deeper title="How the bill is counted">
+	<p>
+		This breakdown matches the challenge judge's published <code>muse_decode_layer</code> floor. Projection weights, KV caches, and working activations come from <code>model.ts</code>. Because the judge does not publish its exact routing targets, the expert line is the remainder of its floor: about {passBill(1).expertsPerLayer.toFixed(1)} experts per layer on the busiest GPU for 1 person, and {passBill(32).expertsPerLayer.toFixed(1)} for 32.
+	</p>
+	<p>
+		The shared projection line grew by about 40% between 1 and 32 tokens because of one Muse Spark Open optimization: at tiny batches ({SLICED_MAX_TOKENS} tokens or fewer), each GPU runs a 1/{GPUS} slice of the <code>unpooler</code> projection, switching to the full table at larger batches.
+	</p>
+</Deeper>
+
+## Caches never share
+
+Every active user carries a private KV cache (except for identical prompt prefixes, covered in Chapter 9). In every full-attention layer, attention reads every entry of every cache in the pass.
+
+<Figure surface="paper" label="one cache per person">
+	<Fragment slot="caption"><Key as="bytes">Cache read by one full layer</Key> on one GPU in one pass, with lengths spread between {count(shortest)} and {count(longest)} tokens to match the contest's batches.</Fragment>
+	<KvPeople />
+</Figure>
+
+Cache bytes add up person by person. At 32 people, one full layer reads {bytes(fullCache32)} of cache, more than {Math.floor(fullCache32 / layerWeights32)} times its {bytes(layerWeights32)} of shared projection weights. Sliding-window layers read only each person's latest {count(SLIDING_WINDOW)} tokens, so almost all of the cache bill comes from the {LAYERS.full} full-attention layers.
+
+## More people, more experts
+
+Expert weights are shared whenever two tokens in a batch choose the same expert. Still, 32 tokens touch many more of each GPU's {LOCAL_EXPERTS} local experts than 1 token does.
+
+<Figure label="which experts a batch reads">
+	<RouterGrid />
+</Figure>
+
+One token touches {routeOne.distinct} of this GPU's {LOCAL_EXPERTS} local experts; 32 tokens touch {routeMany.distinct}. Because routing is skewed, popular experts take clusters of tokens and 32 people activate far fewer than 32 times as many experts. Every active expert is still read in full ({bytes(EXPERT_BYTES)}) even when a single token in the batch chose it.
+
+<InTheChallenge>
+	<p>
+		The challenge times decode at 1, 16, and 32 concurrent users with contexts around {count(CONTEXT_TOKENS)} tokens. Each serving configuration is called a <Term id="load">load</Term>.
+	</p>
+</InTheChallenge>
+
+## Room in memory and continuous batching
+
+Bandwidth is one limit; HBM capacity and scheduling are another. Each H200 holds {H200.memoryGB} GB, of which layer weights take about {count(weightBytesPerGpu / 1e9)} GB. One {count(CONTEXT_TOKENS)}-token conversation needs {bytes(fullLayerCacheBytes(CONTEXT_TOKENS))} per GPU for its full-attention caches plus {bytes(slidingCachePerConv)} for sliding windows ({bytes(perConvCacheBytes)} in total), so raw remaining HBM could hold about {count(conversationsBothCaches)} such conversations before non-layer weights and buffers (or about {count(conversationsThatFit(CONTEXT_TOKENS))} counting full layers alone).
+
+Thirty-two active conversations use only about {bytes(activeCache32)} of KV cache per GPU, well under that memory ceiling. In production serving, active concurrency is typically kept far below raw memory capacity both to keep per-user streaming responsive and to leave tens of gigabytes free for idle prompt caches between turns (Chapter 9), activation space, and CUDA-graph buffers.
+
+When traffic fills the available slots, newcomers have to wait. Picture one GPU's memory as sixteen toy blocks and see what happens when another user arrives.
+
+<Figure surface="paper" label="waiting for room">
+	<MemoryRoom />
+</Figure>
+
+Dara waited even with spare arithmetic on the chip because her cache had no room, and every active user's cache grows by one entry per pass, so a server must leave headroom or pause conversations when memory runs tight.
+
+This is why serving engines like <Term id="sglang">SGLang</Term> and vLLM go far beyond Hugging Face Transformers' default `model.generate()` loop: they combine paged KV memory, captured CUDA graphs, and <Term id="continuousBatching">continuous batching</Term>. Rather than holding newcomers until an entire batch finishes, continuous batching lets finished replies leave and waiting requests join on the very next pass. Anyscale's [post on continuous batching](https://www.anyscale.com/blog/continuous-batching-llm-inference) traces the schedule pass by pass and measures its throughput gains.
+
+A newcomer's first pass is different: it arrives with an entire prompt of hundreds or thousands of tokens. Running that prompt straight through would stall everyone mid-reply, so servers slice long prompts with <Term id="chunkedPrefill">chunked prefill</Term> and weave chunks between decode passes. Why can a server read thousands of prompt tokens so much faster than it writes a reply?

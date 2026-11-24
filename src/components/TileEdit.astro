@@ -1,0 +1,338 @@
+---
+// The one-number edit to kernel 1's launch: how many rows each program owns. Pick a tile height for
+// the pooler and see the launch line, how the programs spread over the H200's compute blocks, and
+// what the choice costs. The kernel body and its answer never change; only the grid does. Every
+// state is computed here, so the first paint is complete and the frame keeps its height.
+import { count } from "../lib/format";
+import { PROJ_BLOCK_K, TILE_CHOICES, TRITON_WARPS, tileTradeoff } from "../lib/kernels";
+import { getProjection, H200 } from "../lib/model";
+
+const projection = getProjection("pooler");
+const programWord = (n: number) => (n === 1 ? "program" : "programs");
+
+/** Programs on each compute block when the grid is spread evenly; the first blocks take the extras. */
+const spread = (programs: number) =>
+	Array.from(
+		{ length: H200.sms },
+		(_, i) => Math.floor(programs / H200.sms) + (i < programs % H200.sms ? 1 : 0),
+	);
+// Shades: idle, one program, two, three or four, five or more.
+const shade = (n: number) => (n === 0 ? 0 : n <= 2 ? n : n <= 4 ? 3 : 4);
+
+function narration(t: ReturnType<typeof tileTradeoff>) {
+	const programs = count(t.programs);
+	const numbers = count(projection.cols);
+	const { maxProgramsPerSm: most, minProgramsPerSm: least } = t;
+	const warpRange = `${count(least * TRITON_WARPS)}–${count(most * TRITON_WARPS)} warps`;
+	if (most === 1)
+		return `${programs} programs leave ${count(t.idleSms)} of ${count(H200.sms)} compute blocks idle, and each active block runs at most one program (${count(t.warpsPerSm)} warps), often too few requests in flight to saturate HBM.`;
+	if (most === 2)
+		return `Spread evenly across the chip, ${programs} programs cover every compute block with up to 2 programs (${count(most * TRITON_WARPS)} warps) per block when registers allow, keeping more memory requests in flight for little extra overhead.`;
+	if (most <= 4)
+		return `${programs} programs assign ${least} to ${most} programs per block (${warpRange} if registers allow), hiding more latency while the grid issues ${programs} logical loads of the token's ${numbers} numbers (many hitting cache) and pays more scheduling overhead.`;
+	return `${programs} tiny programs queue about ${least} deep per compute block: each reads a single row, the grid issues ${programs} logical loads of the token's ${numbers} numbers (most hitting cache), and every program pays scheduling overhead.`;
+}
+
+const STATES = TILE_CHOICES.map((rows) => {
+	const t = tileTradeoff(rows);
+	const loads = spread(t.programs);
+	const tally = new Map<number, number>();
+	for (const n of loads) if (n > 0) tally.set(n, (tally.get(n) ?? 0) + 1);
+	const groups = [...tally].sort((a, b) => b[0] - a[0]);
+	const said = [
+		...groups.map(
+			([n, blocks], i) => `${count(blocks)} ${i === 0 ? "blocks " : ""}with ${n} ${programWord(n)}`,
+		),
+		...(t.idleSms > 0 ? [`${count(t.idleSms)} idle`] : []),
+	].join(", ");
+	const capped = t.maxProgramsPerSm * TRITON_WARPS > t.warpsPerSm;
+	const warps = `${capped ? "capped at" : "up to"} ${count(t.warpsPerSm)}`;
+	return {
+		rows,
+		programs: count(t.programs),
+		warps,
+		reloads: `${count(t.tokenLoads)}×`,
+		levels: loads.map(shade).join(""),
+		said,
+		label: `${count(t.programs)} programs on ${count(H200.sms)} compute blocks: ${said}`,
+		edit: rows === TILE_CHOICES[0] ? "the launch as written" : "same body, one number edited",
+		grid: `# ${count(projection.rows)} rows ÷ ${rows} ${rows === 1 ? "row" : "rows"} per program = ${count(t.programs)} programs`,
+		narration: narration(t),
+	};
+});
+const first = STATES[0];
+const dynamic = STATES.map(({ levels, label, programs, warps, reloads }) => ({
+	levels,
+	label,
+	programs,
+	warps,
+	reloads,
+}));
+const SHADES = [
+	{ level: 0, label: "idle" },
+	{ level: 1, label: "1 program" },
+	{ level: 2, label: "2" },
+	{ level: 3, label: "3–4" },
+	{ level: 4, label: "5 or more" },
+];
+---
+
+<okc-tile-edit data-states={JSON.stringify(dynamic)}>
+	<div class="field">
+		<span class="field-label">tile height</span>
+		<div class="seg" role="group" aria-label="Tile height" data-name="tile">
+			{
+				STATES.map((s, i) => (
+					<button type="button" data-value={s.rows} aria-pressed={i === 0}>
+						{s.rows} {s.rows === 1 ? "row" : "rows"}
+					</button>
+				))
+			}
+		</div>
+	</div>
+
+	<div class="launch">
+		<div class="stack" data-stack>
+			{
+				STATES.map((s, i) => (
+					<p data-state={i} hidden={i !== 0 ? true : undefined}>
+						<span class="edit">{s.edit}</span>
+						<code class="src">
+							{"project[(triton.cdiv(N, "}<b>{s.rows}</b>{"),)](w, x, y, N, K, BLOCK_N="}<b>{s.rows}</b>
+							{`, BLOCK_K=${PROJ_BLOCK_K})`}
+						</code>
+						<code class="src cmt">{s.grid}</code>
+					</p>
+				))
+			}
+		</div>
+	</div>
+
+	<div class="blocks">
+		<div class="tiles" role="img" aria-label={first.label} data-tiles>
+			{Array.from({ length: H200.sms }, (_, i) => <i data-level={first.levels[i]} />)}
+		</div>
+		<p class="key" aria-hidden="true">
+			<span>programs per block</span>
+			{SHADES.map((s) => <span class="sw"><i data-level={s.level} />{s.label}</span>)}
+		</p>
+		<div class="stack said" data-stack aria-hidden="true">
+			{STATES.map((s, i) => <p data-state={i} hidden={i !== 0 ? true : undefined}>{s.said}</p>)}
+		</div>
+	</div>
+
+	<dl class="readout">
+		<div>
+			<dt>programs</dt>
+			<dd data-out="programs">{first.programs}</dd>
+		</div>
+		<div>
+			<dt>warps per block (illustrative upper bound)</dt>
+			<dd data-out="warps">{first.warps}</dd>
+		</div>
+		<div>
+			<dt class="bytes"><span class="mark" aria-hidden="true">■ </span>logical input loads</dt>
+			<dd data-out="reloads">{first.reloads}</dd>
+		</div>
+	</dl>
+
+	<div class="note" aria-live="polite">
+		<div class="stack" data-stack>
+			{STATES.map((s, i) => <p data-state={i} hidden={i !== 0 ? true : undefined}>{s.narration}</p>)}
+		</div>
+	</div>
+</okc-tile-edit>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+
+	type State = { levels: string; label: string; programs: string; warps: string; reloads: string };
+
+	class TileEdit extends FigureElement {
+		setup() {
+			const states: State[] = JSON.parse(this.dataset.states ?? "[]");
+			const grid = this.$("[data-tiles]");
+			const tiles = [...grid.children] as HTMLElement[];
+			const stacks = [...this.querySelectorAll<HTMLElement>("[data-stack]")];
+			const show = (index: number) => {
+				const s = states[index];
+				grid.setAttribute("aria-label", s.label);
+				tiles.forEach((tile, i) => {
+					tile.dataset.level = s.levels[i];
+				});
+				this.out("programs", s.programs);
+				this.out("warps", s.warps);
+				this.out("reloads", s.reloads);
+				for (const stack of stacks) {
+					for (const item of stack.children as HTMLCollectionOf<HTMLElement>) {
+						item.hidden = item.dataset.state !== String(index);
+					}
+				}
+			};
+			const rows = [...this.querySelectorAll<HTMLButtonElement>(".seg button")].map((b) => b.dataset.value);
+			this.onSeg("tile", (value) => show(Math.max(0, rows.indexOf(value))));
+		}
+	}
+
+	define("okc-tile-edit", TileEdit);
+</script>
+
+<style>
+	okc-tile-edit {
+		display: block;
+		font: 0.8125rem/1.5 var(--mono);
+		color: var(--ink-2);
+	}
+	.field {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+	}
+	.seg {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		width: 100%;
+		max-width: 24rem;
+	}
+	.seg button {
+		padding-inline: 0.25rem;
+		text-align: center;
+		white-space: nowrap;
+	}
+	.launch {
+		margin-top: 1rem;
+		padding: 0.65rem 0.8rem;
+		border: 1px solid var(--rule);
+		border-radius: 2px;
+		background: var(--paper-2);
+	}
+	/* Every state sits in one grid cell, so the tallest sets the height and switching never moves
+	   what is below. */
+	.stack {
+		display: grid;
+	}
+	.stack > p {
+		grid-area: 1 / 1;
+		margin: 0;
+	}
+	.stack > p[hidden] {
+		display: block;
+		visibility: hidden;
+	}
+	.edit {
+		display: block;
+		margin-bottom: 0.3rem;
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.src {
+		display: block;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		background: none;
+		box-shadow: none;
+		font: inherit;
+		color: var(--ink);
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		padding-left: 2ch;
+		text-indent: -2ch;
+	}
+	.src.cmt {
+		margin-top: 0.15rem;
+		color: var(--ink-2);
+	}
+	.src b {
+		font-weight: 400;
+		color: var(--ink);
+		box-shadow: inset 0 -2px 0 var(--ink);
+	}
+	.blocks {
+		display: grid;
+		gap: 0.5rem;
+		margin-top: 1.25rem;
+	}
+	.tiles {
+		display: grid;
+		grid-template-columns: repeat(22, minmax(0, 1fr));
+		gap: 2px;
+		max-width: 26rem;
+	}
+	i[data-level] {
+		display: block;
+		aspect-ratio: 1;
+		border: 1px dashed var(--rule);
+		border-radius: 3px;
+		transition: background-color var(--fast) var(--ease);
+	}
+	i[data-level="1"],
+	i[data-level="2"],
+	i[data-level="3"],
+	i[data-level="4"] {
+		border: 1.5px solid var(--ink);
+	}
+	i[data-level="1"] {
+		background: var(--faint);
+	}
+	i[data-level="2"] {
+		background: color-mix(in oklab, var(--ink) 25%, var(--paper));
+	}
+	i[data-level="3"] {
+		background: color-mix(in oklab, var(--ink) 50%, var(--paper));
+	}
+	i[data-level="4"] {
+		background: color-mix(in oklab, var(--ink) 75%, var(--paper));
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		margin: 0;
+		font-size: 0.75rem;
+	}
+	.sw {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+	.sw i {
+		width: 0.75rem;
+		flex: none;
+	}
+	.said p {
+		color: var(--ink-2);
+	}
+	.readout {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+		gap: 0.75rem 1.5rem;
+		margin: 1.5rem 0 1rem;
+	}
+	.readout dt {
+		color: var(--ink-2);
+	}
+	.readout dt.bytes {
+		color: var(--bytes-ink);
+	}
+	.readout dd {
+		margin: 0.2rem 0 0;
+		color: var(--ink);
+		font-variant-numeric: tabular-nums;
+	}
+	.note {
+		padding: 0.65rem 0.85rem;
+		border: 1px solid var(--rule);
+		border-left: 3px solid var(--ink);
+		border-radius: 2px;
+		font-size: 0.875rem;
+		color: var(--ink);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		i[data-level] {
+			transition: none;
+		}
+	}
+</style>

@@ -1,0 +1,135 @@
+---
+// Your own machine's best possible speed for one person: memory bandwidth divided by the bytes
+// read for each token. Each example fills both inputs; typing your own clears the example.
+import { EXAMPLES } from "../lib/serving";
+import { speedReadout } from "../lib/speedCalculator";
+import Seg from "./Seg.astro";
+
+const example = EXAMPLES[0];
+const first = speedReadout(example.gbPerSecond, example.gb);
+---
+
+<okc-speed-calculator
+	class="figure-mono"
+	data-examples={JSON.stringify(EXAMPLES.map((e) => ({ id: e.id, bandwidth: e.gbPerSecond, read: e.gb })))}
+>
+	<div class="examples">
+		<Seg
+			name="example"
+			label="examples"
+			value={example.id}
+			options={EXAMPLES.map((e) => ({ value: e.id, label: e.label }))}
+		/>
+	</div>
+	<div class="inputs">
+		<div class="input">
+			<label for="speed-bandwidth">memory bandwidth, GB a second</label>
+			<input id="speed-bandwidth" type="number" inputmode="decimal" min="1" step="any" value={example.gbPerSecond} data-bandwidth />
+		</div>
+		<div class="input">
+			<label for="speed-read">read for each token, GB</label>
+			<input id="speed-read" type="number" inputmode="decimal" min="0.01" step="any" value={example.gb} data-read />
+		</div>
+	</div>
+
+	<p class="result" aria-live="polite">
+		<span class="sum" data-out="sum">{first.sum}</span>
+		<span class="answer"><b data-out="answer">{first.answer}</b> tokens a second</span>
+		<span class="each" data-out="each">{first.each}</span>
+	</p>
+</okc-speed-calculator>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+	import { speedReadout } from "../lib/speedCalculator";
+
+	type Example = { id: string; bandwidth: number; read: number };
+
+	class SpeedCalculator extends FigureElement {
+		setup() {
+			const bandwidth = this.$<HTMLInputElement>("[data-bandwidth]");
+			const read = this.$<HTMLInputElement>("[data-read]");
+			const examples: Example[] = JSON.parse(this.dataset.examples ?? "[]");
+			this.onSeg("example", (id) => {
+				const e = examples.find((x) => x.id === id);
+				if (e) {
+					bandwidth.value = String(e.bandwidth);
+					read.value = String(e.read);
+				}
+				this.update();
+			});
+			const typed = () => {
+				for (const b of this.querySelectorAll<HTMLElement>('.seg[data-name="example"] button')) {
+					const e = examples.find((x) => x.id === b.dataset.value);
+					const same = e?.bandwidth === Number(bandwidth.value) && e?.read === Number(read.value);
+					b.setAttribute("aria-pressed", String(same));
+				}
+				this.update();
+			};
+			this.on(bandwidth, "input", typed);
+			this.on(read, "input", typed);
+		}
+
+		update() {
+			const bw = Number(this.$<HTMLInputElement>("[data-bandwidth]").value);
+			const gb = Number(this.$<HTMLInputElement>("[data-read]").value);
+			for (const [key, value] of Object.entries(speedReadout(bw, gb))) this.out(key, value);
+		}
+	}
+
+	define("okc-speed-calculator", SpeedCalculator);
+</script>
+
+<style>
+	.inputs {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+		gap: 1.25rem 2rem;
+	}
+	.input {
+		display: grid;
+		gap: 0.5rem;
+		justify-items: start;
+	}
+	label {
+		color: var(--ink);
+	}
+	input[type="number"] {
+		width: min(100%, 12rem);
+		min-height: 2.5rem;
+		padding: 0.25rem 0.625rem;
+		border: 1px solid var(--ink-2);
+		border-radius: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font: 1.125rem var(--mono);
+		font-variant-numeric: tabular-nums;
+	}
+	.examples {
+		margin-bottom: 1.5rem;
+	}
+	.examples :global(.field-label) {
+		display: none;
+	}
+	.result {
+		display: grid;
+		gap: 0.25rem;
+		margin: 1.75rem 0 0;
+		padding-top: 1rem;
+		border-top: 1px dashed var(--rule);
+	}
+	.sum,
+	.each {
+		color: var(--ink-2);
+		min-height: 1.4em;
+	}
+	.answer {
+		color: var(--ink);
+	}
+	b {
+		font-weight: inherit;
+		font-size: 2rem;
+		line-height: 1.2;
+		font-variant-numeric: tabular-nums;
+	}
+</style>

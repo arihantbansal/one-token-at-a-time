@@ -1,0 +1,23 @@
+---
+// A phrase set in a signal's colour, led by the mark the figures draw for it, so prose and
+// captions name what a colour means without naming the colour.
+type Props = { as: "bytes" | "math" };
+const { as } = Astro.props;
+---
+
+<span class="key" data-key={as}><span class="mark" aria-hidden="true">{as === "bytes" ? "■" : "●"}</span><slot /></span>
+
+<style>
+	.mark {
+		font-family: var(--mono);
+		font-size: 0.8em;
+		font-style: normal;
+		margin-right: 0.2em;
+	}
+	[data-key="bytes"] {
+		color: var(--bytes-ink);
+	}
+	[data-key="math"] {
+		color: var(--math-ink);
+	}
+</style>

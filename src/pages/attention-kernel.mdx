@@ -1,0 +1,243 @@
+---
+layout: ../layouts/Stop.astro
+slug: attention-kernel
+description: How a GPU kernel reads one conversation's KV cache for attention. Why unsplit GQA decode leaves the chip underused, how online softmax and split-K decoding fix it, and a teaching kernel read line by line.
+---
+
+import Deeper from "../components/Deeper.astro";
+import Figure from "../components/Figure.astro";
+import InTheChallenge from "../components/InTheChallenge.astro";
+import KernelCode from "../components/KernelCode.astro";
+import Predict from "../components/Predict.astro";
+import RunningMax from "../components/RunningMax.astro";
+import SplitContext from "../components/SplitContext.astro";
+import SplitSoftmax from "../components/SplitSoftmax.astro";
+import Term from "../components/Term.astro";
+import { bytes, count, us, worked } from "../lib/format";
+import { contestTimes } from "../lib/challenge";
+import {
+	ATTN_BLOCK,
+	attentionGroupGrid,
+	GQA_SPLITS,
+	KV_GROUP,
+	runningWorked,
+	splitWorked,
+} from "../lib/kernels";
+import {
+	CONTEXT_TOKENS,
+	DRAFT_TOKENS,
+	H200,
+	HEAD_DIM,
+	KV_HEADS,
+	KV_SIZE,
+	kvBytes,
+	LAYERS,
+	memoryUs,
+	Q_HEADS,
+	SLIDING_WINDOW,
+} from "../lib/model";
+
+export const full = kvBytes(CONTEXT_TOKENS, "full");
+export const window = kvBytes(CONTEXT_TOKENS, "sliding");
+export const entry = KV_SIZE * 2;
+export const unsplit = attentionGroupGrid(1);
+export const split = attentionGroupGrid(GQA_SPLITS);
+export const w = splitWorked();
+export const s2 = w.slices[1];
+export const run = runningWorked();
+export const [t1, t2] = run;
+export const runLse = t2.max + Math.log(t2.sum);
+export const times = contestTimes("muse_attention_decode");
+export const f2 = (n) => worked(Math.round(n * 100) / 100);
+export const pair = (xs) => xs.map((x) => f2(x)).join(" and ");
+
+export const launch = [
+	{ code: `part = torch.empty((heads, splits, ${HEAD_DIM}), device="cuda", dtype=torch.float32)`, note: "Room for every slice's blend, in 32-bit numbers." },
+	{ code: "lse = torch.empty((heads, splits), device=\"cuda\", dtype=torch.float32)", note: "And one packed log-sum-exp scalar per slice." },
+	{
+		code: `attend_slice[(heads, splits)](q, k, v, part, lse, length, triton.cdiv(length, splits), scale, SPLITS=splits, D=${HEAD_DIM}, BLOCK=${ATTN_BLOCK})`,
+		note: "A 2D launch grid: one program per head and slice. Each slice covers `length ÷ splits` tokens, rounded up.",
+	},
+	{ code: `combine[(heads,)](part, lse, out, SPLITS=splits, D=${HEAD_DIM})`, note: "Then the small second kernel: one program per head." },
+];
+
+export const combinePseudo = [
+	{ code: "head = which program am I" },
+	{ code: "load this head's `splits` blends and `lse` values; ignore any slice with `lse == −∞`" },
+	{ code: "top = max(lse) across live slices" },
+	{ code: "weight[s] = exp(lse[s] − top)   # 0 for empty slices" },
+	{ code: "store sum(weight[s] * blend[s]) / sum(weight[s]) as this head's output" },
+];
+
+export const body = [
+	{ code: "@triton.jit" },
+	{
+		code: "def attend_slice(q_ptr, k_ptr, v_ptr, part_ptr, lse_ptr, length, slice_len, scale,",
+		note: "The queries, keys, and values, two output buffers, the conversation's length, the slice length, and the scores' fixed multiplier.",
+	},
+	{ code: "                 SPLITS: tl.constexpr, D: tl.constexpr, BLOCK: tl.constexpr):" },
+	{ code: "    head = tl.program_id(0)", note: "Which head: the grid's first axis." },
+	{ code: "    split = tl.program_id(1)", note: "Which slice: the grid's second axis." },
+	{ code: "    d = tl.arange(0, D)", note: "Positions within a head's list of numbers." },
+	{ code: "    q = tl.load(q_ptr + head * D + d).to(tl.float32)", note: "This head's query.", kind: "bytes" },
+	{ code: '    m = -float("inf")', note: "The largest score seen so far: none yet." },
+	{ code: "    l = 0.0", note: "The running total of e^(score − m) so far." },
+	{ code: "    acc = tl.zeros((D,), dtype=tl.float32)", note: "The unnormalized weighted sum so far: each value times e^(score − m), added up." },
+	{ code: "    start = split * slice_len", note: "Where this slice begins." },
+	{ code: "    end = tl.minimum(start + slice_len, length)", note: "And where it ends: the last slice may be short." },
+	{ code: "    for n in range(start, end, BLOCK):", note: "Walk the slice one tile of tokens at a time. On the worked example, a tile is two tokens." },
+	{ code: "        pos = n + tl.arange(0, BLOCK)", note: "The tile's token positions." },
+	{ code: "        live = pos < end", note: "The mask: off past the slice's end." },
+	{
+		code: "        at = (head * length + pos[:, None]) * D + d[None, :]",
+		note: "Address of every number in the tile's keys/values: a 2D grid, tokens by head positions, as in kernel 1.",
+	},
+	{ code: "        k = tl.load(k_ptr + at, mask=live[:, None], other=0.0).to(tl.float32)", note: "The tile's keys.", kind: "bytes" },
+	{ code: "        v = tl.load(v_ptr + at, mask=live[:, None], other=0.0).to(tl.float32)", note: "And their values.", kind: "bytes" },
+	{
+		code: '        s = tl.where(live, tl.sum(k * q[None, :], axis=1) * scale, -float("inf"))',
+		note: `Score every key against the query; masked slots score −∞ and get zero share. Tile 1: ${pair(t1.tokens.map((t) => t.s))}. Tile 2: ${pair(t2.tokens.map((t) => t.s))}.`,
+		kind: "math",
+	},
+	{ code: "        m_new = tl.maximum(tl.max(s, axis=0), m)", note: `The updated largest score: ${f2(t1.max)}, then ${f2(t2.max)}.`, kind: "math" },
+	{
+		code: "        shrink = tl.exp(m - m_new)",
+		note: `Factor to shrink previous totals: 0 on tile 1 (since e^(−∞) = 0), then ${f2(t2.shrink)}.`,
+		kind: "math",
+	},
+	{
+		code: "        p = tl.exp(s - m_new)",
+		note: `Each score as e^(score − largest). Tile 2: ${pair(t2.tokens.map((t) => t.p))}.`,
+		kind: "math",
+	},
+	{
+		code: "        acc = acc * shrink + tl.sum(p[:, None] * v, axis=0)",
+		note: `Shrink the old weighted sum and add this tile's: ${f2(t1.acc)}, then ${f2(t2.kept.acc)} + ${f2(t2.acc - t2.kept.acc)} = ${f2(t2.acc)}.`,
+		kind: "math",
+	},
+	{
+		code: "        l = l * shrink + tl.sum(p, axis=0)",
+		note: `Do the same for the running total: ${f2(t1.sum)}, then ${f2(t2.kept.sum)} + ${f2(t2.sum - t2.kept.sum)} = ${f2(t2.sum)}.`,
+		kind: "math",
+	},
+	{ code: "        m = m_new" },
+	{ code: "    out = head * SPLITS + split", note: "This program's slot among all slices' partial outputs." },
+	{ code: "    blend = acc / l", note: `Divide the weighted sum by the total to get the slice's blend: ${f2(t2.acc)} ÷ ${f2(t2.sum)} = ${f2(t2.blend)}.`, kind: "math" },
+	{ code: "    lse = m + tl.log(l)", note: `Pack largest score and total into one float: ${f2(t2.max)} + log ${f2(t2.sum)} = ${f2(runLse)}.`, kind: "math" },
+	{ code: "    tl.store(part_ptr + out * D + d, blend)", note: "Write the slice's blend.", kind: "bytes" },
+	{ code: "    tl.store(lse_ptr + out, lse)", note: "And its packed log-sum-exp.", kind: "bytes" },
+];
+export const stage = (from, to) => body.slice(from - 1, to);
+
+export const pseudo = [
+	{ code: "head, slice = which program am I" },
+	{ code: "q = load this head's query" },
+	{ code: "largest = −∞, total = 0, weighted sum = 0" },
+	{ code: "for each tile of tokens in my slice:" },
+	{ code: "    load their keys and values" },
+	{ code: "    score every key against q" },
+	{ code: "    if a score beats largest, shrink total and weighted sum to match, then update largest" },
+	{ code: "    add each e^(score − largest) to total, and it times its value to weighted sum" },
+	{ code: "store blend = weighted sum ÷ total, along with largest and total" },
+];
+
+Attention's mixing step reads no weights. The projections on either side have weight tables like any others, while the kernel that scores past keys and blends past values reads only the conversation's KV cache. For one person's token in a full layer, that is every key and value the conversation has stored on this GPU: {bytes(full)} at {count(CONTEXT_TOKENS)} tokens, in each of the {LAYERS.full} full layers of every pass.
+
+## What the kernel reads
+
+On each GPU, {Q_HEADS} query heads share {KV_HEADS} key-value heads ({KV_GROUP} query heads per KV head under <Term id="gqa">grouped-query attention</Term>). That sharing makes the cache {KV_GROUP} times smaller than giving each query head its own keys and values.
+
+Each number in the cache is stored in <Term id="fp8">FP8</Term> (1 byte). One token's entry in one layer on one GPU is {KV_HEADS} KV heads × (1 key + 1 value) × {HEAD_DIM} numbers × 1 byte = {entry} bytes. Across {count(CONTEXT_TOKENS)} tokens, a full layer reads {bytes(full)} of cache.
+
+Those entries do not sit in one contiguous block of HBM. Because conversations grow unpredictably and finish at different times, reserving one large contiguous buffer per user would waste memory. Serving engines instead use <Term id="pagedAttention">PagedAttention</Term>, borrowing the idea of virtual-memory paging: they place fixed-size cache pages wherever HBM has room and track each conversation's pages in a <Term id="page">page table</Term>. A real attention kernel reads that page table first to locate each token's keys and values.
+
+## Too little work to go around
+
+Because {KV_GROUP} query heads share each KV head, launching {Q_HEADS} separate programs (one per query head) would let {KV_GROUP} independent programs stream the same keys and values from memory, risking up to {KV_GROUP}× redundant HBM traffic whenever active caches outgrow L2. Real GQA decode kernels therefore give one program all {KV_GROUP} query heads of a KV head, loading each K/V tile from HBM once and reusing it across all {KV_GROUP} queries.
+
+That avoids redundant reads, yet leaves a different problem: on this GPU there are only {KV_HEADS} KV heads. Launching one program per KV head creates just {unsplit.programs} programs for {H200.sms} compute blocks, leaving {unsplit.idle} blocks idle and starving HBM of in-flight requests.
+
+The fix applies <Term id="splitK">split-K</Term> to the conversation length: cut each KV head's {count(CONTEXT_TOKENS)}-token history into {GQA_SPLITS} slices and give every slice its own program. Now {KV_HEADS} KV heads × {GQA_SPLITS} slices make {count(split.programs)} programs across {H200.sms} compute blocks. Each program reads {count(split.sliceTokens)} tokens ({bytes(split.bytesPerProgram)}) once for all {KV_GROUP} query heads, keeping the KV cache payload at {bytes(split.totalBytes)} (with small extra traffic for queries and partial slice merges) while putting nearly every block to work.
+
+<Figure surface="paper" label="splitting one person's attention across the chip">
+	<SplitContext />
+</Figure>
+
+The price of splitting is a small second kernel that merges each head's {GQA_SPLITS} partial results into one output. PyTorch's <a href="https://pytorch.org/blog/flash-decoding/">Flash-Decoding post</a> measures what splitting gains on long single-user contexts. At ideal bandwidth, streaming the full layer's {bytes(full)} takes {us(memoryUs(full))}; a sliding layer reads only the latest {count(SLIDING_WINDOW)} tokens ({bytes(window)}, an ideal of {us(memoryUs(window))}), where fixed kernel overhead outweighs the cache read.
+
+## Putting slices back together
+
+Early attention implementations computed all scores into global memory, ran a separate softmax kernel over them, and read those weights back to blend the values. <Term id="flashAttention">FlashAttention</Term> eliminated those round-trips through IO-aware tiling and fusion, building on <Term id="onlineSoftmax">online softmax</Term> (introduced by Milakov and Gimelshein in 2018): scanning keys and values one tile at a time in on-chip registers and rescaling the running softmax total whenever a higher score appears. The same algebra lets us split a conversation across {GQA_SPLITS} programs and recombine their partial results cleanly.
+
+<Predict question="Each slice blends the values of its own tokens. Can the second kernel simply average all the slices' blends together?">
+	<p>
+		No. A token's share is its <code>e^score</code> divided by the total across the whole conversation, and no slice knows that global total. A plain average would give a slice full of irrelevant tokens the same weight as the slice holding the one word that matters.
+	</p>
+</Predict>
+
+Instead, each slice reports its running total alongside its blend so the second kernel can weigh every slice proportionally.
+
+One detail keeps the exponentials safe: `e^score` overflows 32-bit floats for scores above about 88.7. Kernels therefore subtract the largest score seen so far and compute `e^(score − largest)`, which stays between 0 and 1, while keeping track of `largest`. Below are four scores computed all at once, then split into two slices and recombined.
+
+<Figure surface="paper" label="softmax in two slices, recombined">
+	<SplitSoftmax />
+</Figure>
+
+Slice 2 counted its total against its own peak score ({worked(s2.max)}), whereas slice 1 peaked higher ({worked(w.top)}). Because `e^(score − 2) × e^(2 − 3) = e^(score − 3)`, the second kernel rescales slice 2's total onto their shared maximum by multiplying by <code>e^({worked(s2.max)} − {worked(w.top)}) = {worked(s2.shrink)}</code>. It then multiplies each slice's blend by its adjusted total, sums those weighted blends, and divides by the sum of adjusted totals to recover the unsplit answer. Splitting a context across compute blocks and recombining partial softmaxes this way is <Term id="splitContext">split attention</Term> (often called Flash-Decoding).
+
+The same rescaling happens inside each slice: as a program loops tile by tile, whenever a later tile holds a larger score than earlier tiles, it multiplies its saved running total and weighted sum by `e^(old_max − new_max)` before adding the new tile.
+
+## The slice kernel
+
+To keep the indexing transparent, the teaching kernel below uses the simpler per-query-head layout (one program per query head and slice) rather than grouping all {KV_GROUP} query heads per KV head as described above. A production kernel for Muse Spark Open adds four layers on top: grouping all {KV_GROUP} query heads per KV head so HBM is read once, looking up entries through the page table, applying FP8 dequantization scales, and fusing surrounding norm and gate steps.
+
+Count the memory trips first: each program loads its query once, walks its slice's keys and values one tile at a time (each once), and stores its slice's blend along with its largest score and running total.
+
+<Figure surface="paper" label="the slice kernel, in plain steps">
+	<KernelCode lines={pseudo} />
+</Figure>
+
+Compare it with Kernel 1: the tile, loop, mask, and register accumulator are the same moves. What is new is the running maximum that keeps softmax exact across tiles and across slices.
+
+<Deeper title="The slice kernel, line by line (and the log-sum-exp trick)">
+	<p>
+		Production kernels save one write per slice by packing <code>largest</code> and <code>total</code> into a single float called log-sum-exp: <code>lse = largest + log(total)</code>. Because <code>e^lse = e^largest × total</code> recovers the slice's unshifted denominator, the combine kernel subtracts the maximum <code>lse</code> across slices before exponentiating so every slice lands on the same safe scale.
+	</p>
+	<p>
+		The launch comes first. Its 2D grid runs one program per head and slice (<code>splits</code> is a power of two so the combine kernel can index slices with <code>tl.arange(0, SPLITS)</code>, and the kernel assumes at least one token). When extending this indexing to large multi-user batches, cast <code>head * length + pos</code> to <code>tl.int64</code> so big batch caches cannot overflow 32-bit integers.
+	</p>
+	<KernelCode lines={launch} title="the launch" />
+	<p>
+		The worked values below follow one program reading four tokens in two tiles of two, where tile 2 raises the largest score:
+	</p>
+	<RunningMax />
+	<p>
+		When the peak score rose from {f2(t1.max)} to {f2(t2.max)}, everything accumulated on tile 1 was measured against {f2(t1.max)}. Multiplying the saved total and weighted sum by <code>e^({f2(t1.max)} − {f2(t2.max)}) = {f2(t2.shrink)}</code> shifts them onto tile 2's scale before adding tile 2.
+	</p>
+	<p>First, identify which head and slice this program owns and initialize its running state in registers:</p>
+	<KernelCode lines={stage(1, 12)} />
+	<p>Next, walk the slice tile by tile, loading keys and values with a boundary mask:</p>
+	<KernelCode lines={stage(13, 18)} start={13} />
+	<p>Then score the tile and perform the online softmax update:</p>
+	<KernelCode lines={stage(19, 25)} start={19} />
+	<p>Last, normalize the slice's blend and store it alongside its packed <code>lse</code>:</p>
+	<KernelCode lines={stage(26, 30)} start={26} />
+	<p>
+		The launch above calls a second kernel, <code>combine</code>, whose body is omitted here; in plain steps it does this per head:
+	</p>
+	<KernelCode lines={combinePseudo} title="the combine kernel, in plain steps" />
+	<p>
+		One edge case matters on short conversations: trailing slices can hold zero tokens. Their total is 0, so <code>acc / l</code> produces <code>0 ÷ 0 = NaN</code> while <code>lse</code> becomes <code>−∞</code>. The combine kernel must skip empty slices explicitly, because in floating-point arithmetic <code>0 × NaN = NaN</code> would corrupt the head's output.
+	</p>
+</Deeper>
+
+<InTheChallenge problem="muse_attention_decode">
+	<p>
+		<code>muse_attention_decode</code> times attention and its adjacent small ops for sliding and full layers around {count(CONTEXT_TOKENS)} tokens, across single-user decode, batched decode, and groups of {DRAFT_TOKENS} guessed tokens verified together (Chapter 9). It is the challenge's only problem with no weights. Combined across its loads, the ideal floor is {us(times.ideal)} per pass, SGLang takes {us(times.sglang)}{times.best !== undefined && <>, and the best entry takes {us(times.best)}</>}.
+	</p>
+	<p>
+		Every key in the window (or full context) must be read with no skipping, and the cache stays in FP8. One open question it poses: when many users share a pass with different conversation lengths, how do you keep all {H200.sms} compute blocks evenly busy?
+	</p>
+</InTheChallenge>
+
+For one person, the chip spends a pass reading fixed weights it uses twice each alongside a cache only that person touches. The weights, at least, are the same for everyone on the server. What if a second person's token rides along in the same pass?

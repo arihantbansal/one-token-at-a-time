@@ -1,0 +1,128 @@
+---
+layout: ../layouts/Stop.astro
+slug: attention
+description: How a model takes the whole conversation into account for every new token, and why it keeps each token's keys and values instead of working them out again.
+---
+
+import AttentionMix from "../components/AttentionMix.astro";
+import CacheGrows from "../components/CacheGrows.astro";
+import CacheLayers from "../components/CacheLayers.astro";
+import Deeper from "../components/Deeper.astro";
+import Figure from "../components/Figure.astro";
+import Key from "../components/Key.astro";
+import KvWindow from "../components/KvWindow.astro";
+import LookBack from "../components/LookBack.astro";
+import Predict from "../components/Predict.astro";
+import Recompute from "../components/Recompute.astro";
+import Term from "../components/Term.astro";
+import { decodeThroughput } from "../lib/challenge";
+import { count, percent, worked } from "../lib/format";
+import {
+	ACTIVE_WEIGHTS,
+	ARITHMETIC_TOKENS_PER_SECOND,
+	attentionFlops,
+	CONTEXT_TOKENS,
+	HEAD_DIM,
+	LAYERS,
+	LONG_CONTEXT_ARITHMETIC_TOKENS_PER_SECOND,
+	PREFILL_CHUNK,
+	SLIDING_WINDOW,
+	TOTAL_WEIGHTS,
+} from "../lib/model";
+import { WORDS } from "../lib/riverBank";
+
+export const arithmetic = ARITHMETIC_TOKENS_PER_SECOND;
+export const longArithmetic = LONG_CONTEXT_ARITHMETIC_TOKENS_PER_SECOND;
+export const onePerson = decodeThroughput(1).each;
+export const attnOps = attentionFlops(CONTEXT_TOKENS);
+export const billions = (n) => count(Math.round(n / 1e9));
+export const about = (n, step) => count(Math.round(n / step) * step);
+export const longOverSolo = about(longArithmetic / onePerson, 10);
+export const redone = (WORDS.length * (WORDS.length + 1)) / 2;
+// English prose runs about three words to every four tokens.
+export const words = CONTEXT_TOKENS * 0.75;
+
+The direct way to use earlier tokens is to feed the whole conversation back through the model alongside every new token. On a six-word sentence like "{WORDS.join(" ")}", that looks harmless.
+
+<Figure surface="paper" label="a pass that keeps nothing">
+	<Recompute />
+</Figure>
+
+Generating {count(WORDS.length)} tokens this way runs {count(redone)} tokens through the model, and writing the thousandth token would redo the 999 before it. A long coding session can reach {count(CONTEXT_TOKENS)} tokens (about {count(words)} words, the length of a novel). Running all {count(CONTEXT_TOKENS)} tokens back through {billions(ACTIVE_WEIGHTS)} billion active weights would take about {worked(CONTEXT_TOKENS / arithmetic)} seconds of arithmetic for every new token, even at the server's ideal speed. If the model keeps what it already computed for earlier tokens, each pass does only one token's work. What it can keep depends on what a new token takes from the ones before it.
+
+## Looking back
+
+In "we sat on the river bank", only the earlier words settle which "bank" is meant. The step that brings them in is <Term id="attention">attention</Term>, and it runs in every layer. Attention builds a blend of the tokens so far, weighted toward whichever earlier tokens matter most to the new one, so "bank" can lean on "river".
+
+Because the model writes left to right, each token sees only itself and the tokens before it; when "bank" runs through its pass, the word after it does not exist yet. Each bar below is how much one token counts in the blend for "bank", with illustrative shares.
+
+<Figure surface="paper" label="what bank looks at">
+	<LookBack />
+</Figure>
+
+"river" takes the largest share, pulling the blend toward it, and "bank" itself counts too. Nothing after "bank" plays a part.
+
+## Keys, values, and a query
+
+How does a token decide how much each earlier token counts? In every layer, projections (just like the twelve-weight table) turn each token's working numbers into short lists:
+- Its key advertises what the token offers.
+- Its value carries what it contributes to a blend that includes it.
+- The new token also makes a query, stating what it is looking for.
+
+Attention scores each earlier token by taking a weighted sum of its key against the query: multiply matching entries and add up the products. A key aligned with the query scores high. The model divides each score by a fixed constant (the square root of the key's length) so scores stay in a steady range. Then <Term id="softmax">softmax</Term> turns those scores into shares adding up to 1: it raises *e* (about {worked(Math.E)}) to each score and divides by their total. Exponentiating keeps every share positive and turns modest leads in score into much larger shares. Finally, attention adds up the values, each weighted by its token's share.
+
+In Muse Spark Open, each query, key, and value is {HEAD_DIM} numbers long. Below they are shrunk to two numbers across three tokens so every line can be checked by hand.
+
+<Figure surface="paper" label="one attention step by hand">
+	<AttentionMix />
+</Figure>
+
+Whichever key aligns best with the query gets the largest share and pulls the blend toward its value. Attention needed nothing from earlier tokens except their keys and values. [3Blue1Brown's lesson on attention](https://www.3blue1brown.com/lessons/attention) animates the same scoring step on real sentences.
+
+Real models run many <Term id="heads">attention heads</Term> side by side in each layer, each with its own query so different heads can look for different relationships. Rather than giving every query head private keys and values, modern models use <Term id="gqa">grouped-query attention</Term>: several query heads share one set of keys and values, cutting the number of keys and values attention has to handle. Their blends are joined at the end of attention.
+
+## Keeping keys and values
+
+<Predict question="A token's key and value in a layer come from its working numbers in that layer. When the model writes a later token, can the earlier tokens' keys and values change?">
+	<p>
+		No. A token never looks forward, so its working numbers depend only on itself and earlier tokens; nothing written later can reach them. The model can compute each token's key and value once, in that token's own pass, and keep them. Every later pass then makes a key and value for its newest token alone: one token's work instead of {count(CONTEXT_TOKENS)}.
+	</p>
+</Predict>
+
+That stored table of keys and values is the conversation's <Term id="kvCache">KV cache</Term>, the third kind of data in a pass. Weights are fixed and shared by everyone, working numbers last one pass, and the cache belongs to one conversation for as long as it runs. Below, the pass for "bank" appends its entries in the last column.
+
+<Figure surface="paper" label="the cache, one entry per token in every layer">
+	<CacheLayers />
+</Figure>
+
+One token adds {LAYERS.total} entries (one per layer), leaving earlier entries untouched. A cache starts during <Term id="prefill">prefill</Term>, when the model reads the prompt all together, or in chunks of {count(PREFILL_CHUNK)} tokens when a prompt is long so intermediate buffers stay bounded. By the time the reply's first token is picked, the prompt is already in the cache. [Hugging Face's cache guide](https://huggingface.co/docs/transformers/main/en/cache_explanation) shows the same bookkeeping in code.
+
+Caching trades arithmetic for memory reads. To score "bank" against "river", attention needs "river"'s key, so it reads every key it may look at; because even a small share contributes to the blend, it reads every value too. A pass no longer redoes earlier tokens, yet it must <Key as="bytes">read</Key> their cache entries, one more on every pass.
+
+## Two kinds of layer
+
+Reading every entry in all {LAYERS.total} layers would make long conversations steadily slower. Muse Spark Open mixes two kinds of layer: {LAYERS.full} of its {LAYERS.total} layers attend over the full conversation, while the other {LAYERS.sliding} use a <Term id="slidingWindow">sliding window</Term> of at most the latest {count(SLIDING_WINDOW)} tokens (the new one included), shifting forward one token per pass.
+
+Shrink the window to three tokens instead of {count(SLIDING_WINDOW)} across three passes.
+
+<Figure surface="paper" label="full and sliding layers over three passes">
+	<CacheGrows />
+</Figure>
+
+The full layer reads one more entry each pass, while the sliding layer stays capped at three. Once a conversation passes {count(SLIDING_WINDOW)} tokens, a sliding layer reads the same amount no matter how long the conversation gets.
+
+<Deeper title="How attention knows word order">
+	<p>
+		A blend does not care about order: shuffle earlier tokens and the sum comes out the same. Attention on its own therefore gets no direct signal of which token came first. In Muse Spark Open's sliding layers, each query and key is adjusted to carry its token's position using <Term id="rope">rotary embeddings</Term> (RoPE), which rotate pairs of numbers by an angle set by position. The full layers skip that rotation. EleutherAI's <a href="https://blog.eleuther.ai/rotary-embeddings/">post on rotary embeddings</a> derives why those rotations turn relative distance into an angle difference.
+	</p>
+</Deeper>
+
+At real conversation lengths, the difference is wide. Take our {count(CONTEXT_TOKENS)}-token coding session, matching the challenge's timings, and compare what each layer type reads for one token.
+
+<Figure surface="paper" label={`one layer's reads at ${count(CONTEXT_TOKENS)} tokens`}>
+	<KvWindow />
+</Figure>
+
+The sliding layer reads {percent(SLIDING_WINDOW / CONTEXT_TOKENS)} of what the full layer reads, so conversation length adds cache traffic mainly in the {LAYERS.full} full layers. That long <Term id="context">context</Term> also adds substantial arithmetic: scoring and blending {count(CONTEXT_TOKENS)} cached entries across all layers adds about {billions(attnOps)} billion operations per token on top of the {billions(2 * ACTIVE_WEIGHTS)} billion from weights, bringing the pure-arithmetic ceiling from about {about(arithmetic, 1000)} down to about {about(longArithmetic, 1000)} tokens a second, still about {longOverSolo} times faster than the {about(onePerson, 10)} tokens a second a single user gets.
+
+Attention's projections hold a small fraction of Muse Spark Open's {billions(TOTAL_WEIGHTS)} billion weights. Almost all the rest sit in the other main stage of each layer, yet a token reads only {billions(ACTIVE_WEIGHTS)} billion weights in all. Which ones, and who decides?

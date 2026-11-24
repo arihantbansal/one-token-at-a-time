@@ -1,0 +1,372 @@
+---
+// The 404 page's game: one GPU's memory, the weights in their real share and caches in the rest.
+// Admit conversations from the queue; every pass each one writes a token and its cache grows.
+import { bytes } from "../lib/format";
+import { H200, weightBytesPerGpu } from "../lib/model";
+import {
+	CACHE_SQUARES,
+	cells,
+	newGame,
+	REPLY,
+	RULES,
+	readouts,
+	slotText,
+	WEIGHT_SQUARES,
+} from "../lib/outOfMemory";
+import Readout from "./Readout.astro";
+
+const game = newGame(1);
+const first = readouts(game, null);
+const slots = Array.from({ length: RULES.queue }, (_, i) => game.queue[i]);
+---
+
+<okc-out-of-memory class="figure-mono">
+	<Readout
+		items={[
+			{ key: "score", label: "score", value: first.score },
+			{ key: "used", label: "cache squares", value: first.used },
+			{ key: "people", label: "in the batch", value: first.people },
+			{ key: "strikes", label: "preemptions left", value: first.strikes },
+		]}
+	/>
+
+	<div
+		class="memory"
+		role="img"
+		aria-label={`One GPU's memory: ${WEIGHT_SQUARES} squares of weights, ${CACHE_SQUARES} free for caches.`}
+		data-memory
+	>
+		{cells(game).map(([kind, name]) => <span class={kind}>{name}</span>)}
+	</div>
+	<p class="key" aria-hidden="true">
+		<span><span class="obj-weight sample"></span> weights, {bytes(weightBytesPerGpu)} of {H200.memoryGB} GB</span>
+		<span><span class="obj-cache sample">A</span> a cache, one square a token</span>
+		<span><span class="next sample"></span> next pass</span>
+	</p>
+	<p class="spread">Replies run {REPLY.min} to {REPLY.max} tokens, most around {REPLY.typical}. You learn one's length when it ends.</p>
+
+	<p class="head">in the batch: reply tokens written</p>
+	<ol class="seats" data-seats>{Array.from({ length: RULES.seats }, () => <li></li>)}</ol>
+
+	<p class="head">waiting: passes until they leave <span class="hint">· keys 1–{RULES.queue}</span></p>
+	<ol class="queue">
+		{
+			slots.map((c, i) => (
+				<li>
+					<button type="button" class="btn" disabled data-slot={i}>
+						<kbd class="hint">{i + 1}</kbd>
+						<span class="obj-cache">{c?.name}</span>
+						<span class="sizes" data-sizes>{c ? slotText(c).sizes : "empty"}</span>
+						<span class="wait" data-wait>{c ? slotText(c).wait : ""}</span>
+					</button>
+				</li>
+			))
+		}
+	</ol>
+
+	<div class="controls">
+		<button type="button" class="btn" data-start>start</button>
+		<button type="button" class="btn timed" disabled data-pause>pause</button>
+		<button type="button" class="btn turns" disabled data-next>next pass</button>
+		<span data-out="pass">{first.pass}</span>
+	</div>
+	<p class="status" aria-live="polite" data-status>
+		Admit people from the queue. Each pass, each of them writes a token: one more square of cache.
+	</p>
+
+	<Readout
+		items={[
+			{ key: "tokens", label: "tokens written", value: first.tokens },
+			{ key: "finished", label: "replies finished", value: first.finished },
+			{ key: "most", label: "most in one pass", value: first.most },
+			{ key: "best", label: "best score", value: first.best },
+		]}
+	/>
+</okc-out-of-memory>
+
+<script>
+	import { define, FigureElement } from "../lib/figure";
+	import { CACHE_SQUARES, admission, cells, type Game, newGame, admit as join, pass, RULES, readouts, slotText, used } from "../lib/outOfMemory";
+
+	const KEY = "okc-out-of-memory-best";
+	const turns = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+	class OutOfMemory extends FigureElement {
+		game: Game = newGame(1);
+		started = false;
+		timer = 0;
+		best: number | null = null;
+
+		setup() {
+			try {
+				const saved = localStorage.getItem(KEY);
+				if (saved !== null) this.best = Number(saved);
+			} catch {}
+			this.out("best", readouts(this.game, this.best).best);
+			this.on(this.$("[data-start]"), "click", () => this.start());
+			this.on(this.$("[data-pause]"), "click", () => (this.timer ? this.pause() : this.resume()));
+			this.on(this.$("[data-next]"), "click", () => this.step());
+			for (const b of this.querySelectorAll<HTMLButtonElement>("[data-slot]")) {
+				this.on(b, "click", () => this.admit(Number(b.dataset.slot)));
+			}
+			const key = (e: KeyboardEvent) => {
+				const n = Number(e.key);
+				if (!this.started || e.metaKey || e.ctrlKey || e.altKey || !(n >= 1 && n <= RULES.queue)) return;
+				if (e.target instanceof Element && e.target.closest("input, textarea, select")) return;
+				this.admit(n - 1);
+			};
+			const hidden = () => document.hidden && this.timer && this.pause();
+			this.on(this, "keydown", key);
+			document.addEventListener("visibilitychange", hidden);
+			this.onCleanup(() => {
+				this.pause();
+				document.removeEventListener("visibilitychange", hidden);
+			});
+		}
+
+		start() {
+			this.pause();
+			this.game = newGame(Date.now() % 2 ** 31);
+			this.started = true;
+			this.$("[data-start]").textContent = "restart";
+			this.say("Started. Keep the caches inside memory.");
+			if (!turns()) this.resume();
+			this.render();
+		}
+
+		pause() {
+			clearInterval(this.timer);
+			this.timer = 0;
+			this.$("[data-pause]").textContent = "resume";
+		}
+
+		resume() {
+			if (this.game.over || !this.started) return;
+			this.timer = window.setInterval(() => this.step(), RULES.passMs);
+			this.$("[data-pause]").textContent = "pause";
+		}
+
+		admit(slot: number) {
+			const c = this.game.queue[slot];
+			if (!this.started || this.game.over || !c) return;
+			join(this.game, slot);
+			this.say(this.game.events.join(" "));
+			this.render();
+		}
+
+		step() {
+			const g = this.game;
+			pass(g);
+			const bad = g.events.filter((e) => !e.includes("is done"));
+			if (g.over) {
+				this.pause();
+				if (this.best === null || g.score > this.best) {
+					this.best = g.score;
+					try {
+						localStorage.setItem(KEY, String(g.score));
+					} catch {}
+				}
+				const why = g.over === "memory" ? "Out of memory" : `Shift over after ${RULES.passes} passes`;
+				this.say(`${why}. Score ${g.score}, ${g.finished} replies finished. Press restart to play again.`);
+			} else if (bad.length) this.say(bad.slice(0, 2).join(" "));
+			this.render();
+		}
+
+		say(text: string) {
+			this.$("[data-status]").textContent = text;
+		}
+
+		render() {
+			const g = this.game;
+			for (const [k, v] of Object.entries(readouts(g, this.best))) this.out(k, v);
+			const memory = this.$("[data-memory]");
+			cells(g).forEach(([kind, name], i) => {
+				memory.children[i].className = kind;
+				memory.children[i].textContent = name;
+			});
+			memory.setAttribute(
+				"aria-label",
+				`One GPU's memory: weights, then caches using ${used(g)} of ${CACHE_SQUARES} squares; the next pass needs ${g.batch.length} more.`,
+			);
+			[...this.$("[data-seats]").children].forEach((seat, i) => {
+				const c = g.batch[i];
+				seat.textContent = c ? `${c.name} ${c.written}` : "";
+			});
+			for (const b of this.querySelectorAll<HTMLButtonElement>("[data-slot]")) {
+				const i = Number(b.dataset.slot);
+				const c = g.queue[i];
+				const reason = admission(g, i);
+				b.disabled = !this.started || !c || g.over !== null;
+				b.setAttribute("aria-disabled", String(reason !== null));
+				this.$(".obj-cache", b).textContent = c?.name ?? "";
+				this.$("[data-sizes]", b).textContent = c ? slotText(c).sizes : "empty";
+				this.$("[data-wait]", b).textContent = c ? slotText(c).wait : "";
+				b.setAttribute(
+					"aria-label",
+					c
+						? `admit ${c.name}: prompt ${c.prompt}, reply unknown, leaves in ${RULES.patience - c.waited} passes${reason ? `. ${reason}` : ""}`
+						: `slot ${i + 1} empty`,
+				);
+			}
+			const live = this.started && !g.over;
+			this.$<HTMLButtonElement>("[data-pause]").disabled = !live;
+			this.$<HTMLButtonElement>("[data-next]").disabled = !live;
+		}
+	}
+
+	define("okc-out-of-memory", OutOfMemory);
+</script>
+
+<style>
+	okc-out-of-memory :global(.readout) {
+		grid-template-columns: repeat(2, 1fr);
+		margin: 0 0 1.25rem;
+	}
+	@media (min-width: 40rem) {
+		okc-out-of-memory :global(.readout) {
+			grid-template-columns: repeat(4, 1fr);
+		}
+	}
+	p {
+		margin: 0;
+	}
+	.memory {
+		display: grid;
+		grid-template-columns: repeat(10, 1.25rem);
+		gap: 2px;
+		width: max-content;
+		padding: 0.375rem;
+		border: 1px solid var(--ink-2);
+	}
+	.memory > span,
+	.sample {
+		--obj: 1.25rem;
+		min-width: 0;
+		height: var(--obj);
+	}
+	@media (min-width: 40rem) {
+		.memory {
+			grid-template-columns: repeat(20, 1.5rem);
+		}
+		.memory > span {
+			--obj: 1.5rem;
+		}
+	}
+	.free {
+		border: 1px dashed var(--rule);
+	}
+	.next {
+		border: 1.5px dashed var(--ink-2);
+	}
+	.key {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem 1.25rem;
+		margin-top: 0.75rem;
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.key > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.sample {
+		--obj: 1rem;
+		display: inline-grid;
+		width: 1rem;
+		font-size: 0.625rem;
+	}
+	.spread {
+		margin-top: 0.75rem;
+		color: var(--ink);
+	}
+	.head {
+		margin: 1.25rem 0 0.5rem;
+		color: var(--ink-2);
+	}
+	@media (hover: none) {
+		.hint {
+			display: none;
+		}
+	}
+	ol {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 0.375rem;
+	}
+	.seats {
+		grid-template-columns: repeat(4, 1fr);
+	}
+	@media (min-width: 40rem) {
+		.seats {
+			grid-template-columns: repeat(8, 1fr);
+		}
+	}
+	.seats li {
+		height: 2.25rem;
+		display: grid;
+		place-items: center;
+		border: 1px solid var(--rule);
+		font-variant-numeric: tabular-nums;
+	}
+	.seats li:empty {
+		border-style: dashed;
+	}
+	.queue button {
+		display: grid;
+		grid-template-columns: auto auto 1fr auto;
+		align-items: center;
+		gap: 0.625rem;
+		width: 100%;
+		min-height: 2.5rem;
+		white-space: nowrap;
+		text-align: left;
+		color: var(--ink);
+	}
+	.queue button:disabled,
+	.queue button[aria-disabled="true"] {
+		cursor: default;
+		color: var(--ink-2);
+		background: none;
+	}
+	.sizes {
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.queue .obj-cache {
+		--obj: 1.375rem;
+	}
+	.queue .obj-cache:empty {
+		visibility: hidden;
+	}
+	kbd,
+	.wait {
+		color: var(--ink-2);
+		font-variant-numeric: tabular-nums;
+	}
+	.controls {
+		flex-wrap: nowrap;
+		gap: 0.75rem;
+		margin-top: 1.25rem;
+	}
+	.turns {
+		display: none;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.turns {
+			display: inline-block;
+		}
+		.timed {
+			display: none;
+		}
+	}
+	.status {
+		min-height: 4.5em;
+		margin: 1rem 0 1.25rem;
+		line-height: 1.5;
+		color: var(--ink);
+	}
+</style>

@@ -1,0 +1,138 @@
+---
+// One pass through the toy projection for four people: one read of the weights for all of them,
+// while each keeps its own working numbers and its own cache, which this step leaves alone.
+import { worked } from "../lib/format";
+import { W, X } from "../lib/toy";
+
+const people = [
+	{ name: "Asha", working: X, cached: 9 },
+	{ name: "Ben", working: [0.3, -1.2, 0.8, 0.1], cached: 5 },
+	{ name: "Chen", working: [-0.5, 1.0, 0.0, 0.4], cached: 2 },
+	{ name: "Dara", working: [2.0, -0.3, 0.6, -1.0], cached: 12 },
+].map((p) => ({ ...p, out: W.map((row) => row.reduce((sum, w, i) => sum + w * p.working[i], 0)) }));
+const weights = W.flat();
+---
+
+<div class="batch">
+	<section class="shared">
+		<p class="name">weights</p>
+		<div class="weights" role="img" aria-label={`Twelve weights, read once for all four people: ${weights.map(worked).join(", ")}`}>
+			{weights.map((w) => <span class="obj-weight">{worked(w)}</span>)}
+		</div>
+		<p class="note">read once in this pass, used by all four</p>
+	</section>
+
+	<div class="people">
+		{
+			people.map((p) => (
+				<section class="person">
+					<p class="name">{p.name}</p>
+					<p class="kind">working numbers in, and out</p>
+					<div class="flow" role="img" aria-label={`${p.name}'s working numbers ${p.working.map(worked).join(", ")} become ${p.out.map(worked).join(", ")}`}>
+						<span class="group">
+							{p.working.map((x) => (
+								<span class="obj-work">{worked(x)}</span>
+							))}
+						</span>
+						<span class="group">
+							<span class="arrow" aria-hidden="true">→</span>
+							{p.out.map((y) => (
+								<span class="obj-work">{worked(y)}</span>
+							))}
+						</span>
+					</div>
+					<p class="kind">cache, untouched by this step</p>
+					<div class="cache" role="img" aria-label={`${p.cached} cache entries, kept apart from everyone else's`}>
+						{Array.from({ length: p.cached }, () => (
+							<span class="obj-cache" />
+						))}
+					</div>
+				</section>
+			))
+		}
+	</div>
+</div>
+
+<style>
+	.batch {
+		display: grid;
+		gap: 1.5rem;
+		max-width: 46rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.45 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	.name {
+		color: var(--ink);
+		margin-bottom: 0.5rem;
+	}
+	.kind {
+		margin-top: 0.75rem;
+		margin-bottom: 0.375rem;
+		font-size: 0.75rem;
+	}
+	.note {
+		margin-top: 0.375rem;
+		font-size: 0.75rem;
+	}
+	.shared {
+		text-align: center;
+		padding-bottom: 1.25rem;
+		border-bottom: 1px dashed var(--rule);
+	}
+	.weights {
+		display: inline-grid;
+		grid-template-columns: repeat(4, 3.25rem);
+		gap: 4px;
+	}
+	.people {
+		display: grid;
+		gap: 1rem;
+	}
+	@media (min-width: 46rem) {
+		.people {
+			grid-template-columns: 1fr 1fr;
+			gap: 1.25rem;
+		}
+	}
+	.person {
+		padding: 0.875rem 1rem 1rem;
+		border: 1px solid var(--rule);
+		border-radius: 8px;
+		background: var(--paper);
+	}
+	.flow {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+	.group {
+		display: flex;
+		align-items: center;
+		gap: 3px;
+	}
+	.obj-weight,
+	.obj-work {
+		--obj: 1.875rem;
+		min-width: 3.25rem;
+		padding-inline: 0.375rem;
+	}
+	.arrow {
+		width: 1.25rem;
+		text-align: center;
+		color: var(--ink-2);
+	}
+	.cache {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 3px;
+	}
+	.obj-cache {
+		--obj: 0.875rem;
+		min-width: 0;
+		width: 0.875rem;
+	}
+</style>

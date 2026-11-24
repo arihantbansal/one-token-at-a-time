@@ -1,0 +1,189 @@
+---
+// Softmax over four scores done whole, then as two slices that each keep their own maximum, sum
+// and blend, then the combine that rescales each slice to the overall maximum. Every number is
+// rounded to hundredths and computed from the rounded numbers before it.
+import { twoPlaces, worked } from "../lib/format";
+import { splitWorked } from "../lib/kernels";
+
+const w = splitWorked();
+const names = ["slice 1", "slice 2"];
+---
+
+<div class="split-softmax">
+	<section>
+		<h3>all four scores at once: the largest is {worked(w.top)}</h3>
+		<table>
+			<thead>
+				<tr>
+					<th scope="col">score</th>
+					<th scope="col" class="n">e<sup>score − {worked(w.top)}</sup></th>
+					<th scope="col" class="n">value</th>
+					<th scope="col" class="n">× value</th>
+				</tr>
+			</thead>
+			<tbody>
+				{
+					w.whole.map((t) => (
+						<tr>
+							<td>{worked(t.s)}</td>
+							<td class="n">{twoPlaces(t.p)}</td>
+							<td class="n">{worked(t.v)}</td>
+							<td class="n">{twoPlaces(t.pv)}</td>
+						</tr>
+					))
+				}
+			</tbody>
+			<tfoot>
+				<tr>
+					<th scope="row">total, weighted sum</th>
+					<td class="n">{twoPlaces(w.wholeSum)}</td>
+					<td></td>
+					<td class="n">{twoPlaces(w.wholeAcc)}</td>
+				</tr>
+			</tfoot>
+		</table>
+		<p class="result">blend: weighted sum ÷ total = {twoPlaces(w.wholeAcc)} ÷ {twoPlaces(w.wholeSum)} = <b>{twoPlaces(w.wholeOut)}</b></p>
+	</section>
+
+	<section>
+		<h3>two slices, each with its own largest score</h3>
+		<div class="slices">
+			{
+				w.slices.map((s, i) => (
+					<table>
+						<caption>
+							{names[i]}: largest {worked(s.max)}
+						</caption>
+						<thead>
+							<tr>
+								<th scope="col">score</th>
+								<th scope="col" class="n">e<sup>score − {worked(s.max)}</sup></th>
+								<th scope="col" class="n">× value</th>
+							</tr>
+						</thead>
+						<tbody>
+							{s.tokens.map((t) => (
+								<tr>
+									<td>{worked(t.s)}</td>
+									<td class="n">{twoPlaces(t.p)}</td>
+									<td class="n">{twoPlaces(t.pv)}</td>
+								</tr>
+							))}
+						</tbody>
+						<tfoot>
+							<tr>
+								<th scope="row">total, weighted sum</th>
+								<td class="n">{twoPlaces(s.sum)}</td>
+								<td class="n">{twoPlaces(s.acc)}</td>
+							</tr>
+						</tfoot>
+					</table>
+				))
+			}
+		</div>
+		<p class="result">
+			{w.slices.map((s, i) => <span>{names[i]}'s blend: {twoPlaces(s.acc)} ÷ {twoPlaces(s.sum)} = {twoPlaces(s.out)}</span>)}
+		</p>
+	</section>
+
+	<section>
+		<h3>combine: bring each slice's sum to the overall largest, {worked(w.top)}</h3>
+		<table>
+			<thead>
+				<tr>
+					<th scope="col">slice</th>
+					<th scope="col" class="n">sum × e<sup>largest − {worked(w.top)}</sup></th>
+					<th scope="col" class="n">× its blend</th>
+				</tr>
+			</thead>
+			<tbody>
+				{
+					w.slices.map((s, i) => (
+						<tr>
+							<td>{names[i]}</td>
+							<td class="n">
+								{twoPlaces(s.sum)} × {twoPlaces(s.shrink)} = {twoPlaces(s.weight)}
+							</td>
+							<td class="n">{twoPlaces(s.weighted)}</td>
+						</tr>
+					))
+				}
+			</tbody>
+			<tfoot>
+				<tr>
+					<th scope="row">total, weighted sum</th>
+					<td class="n">{twoPlaces(w.total)}</td>
+					<td class="n">{twoPlaces(w.blend)}</td>
+				</tr>
+			</tfoot>
+		</table>
+		<p class="result">blend: weighted sum ÷ total = {twoPlaces(w.blend)} ÷ {twoPlaces(w.total)} = <b>{twoPlaces(w.splitOut)}</b>, the same as all at once</p>
+	</section>
+</div>
+
+<style>
+	.split-softmax {
+		display: grid;
+		gap: 2rem;
+		max-width: 34rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	table {
+		width: 100%;
+		margin: 0;
+		font: inherit;
+		border-collapse: collapse;
+	}
+	caption {
+		text-align: left;
+		padding-bottom: 0.25rem;
+		color: var(--ink);
+	}
+	th,
+	td {
+		padding: 0.2rem 0.5rem 0.2rem 0;
+		font-weight: inherit;
+		text-align: left;
+		border-bottom: 1px dashed var(--rule);
+	}
+	.n {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	tfoot th,
+	tfoot td {
+		color: var(--ink);
+		border-bottom: 0;
+		border-top: 1px solid var(--ink-2);
+	}
+	sup {
+		font-size: 0.7em;
+	}
+	.slices {
+		display: grid;
+		gap: 1rem;
+	}
+	@media (min-width: 36rem) {
+		.slices {
+			grid-template-columns: 1fr 1fr;
+			gap: 1.5rem;
+		}
+	}
+	.result {
+		margin: 0.5rem 0 0;
+	}
+	.result span {
+		display: block;
+	}
+	b {
+		font-weight: inherit;
+		color: var(--ink);
+	}
+</style>

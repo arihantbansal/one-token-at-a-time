@@ -1,0 +1,171 @@
+---
+// One token's way through one layer and into the next. Attention and the experts branch each read
+// a normalized copy of the running total, then their normalized result is mixed back in.
+import { worked } from "../lib/format";
+import { ATTENTION_RESULT, EXPERTS_RESULT, KEEP, MIX, normalized, size, TOTALS } from "../lib/runningTotal";
+
+const CACHED = 5;
+const EXPERTS = 8;
+const CHOSEN = new Set([2, 5]);
+const [t0, t1, t2] = TOTALS;
+
+type Frame = {
+	label: string;
+	total: number[];
+	totalName?: string;
+	totalLit?: boolean;
+	work?: { name: string; values: number[] };
+	step?: "attention" | "experts";
+};
+const FRAMES: Frame[] = [
+	{ label: "the running total arrives from the layer before", total: t0, totalLit: true },
+	{
+		label: `a copy, ÷ ${worked(size(t0))}, goes into attention, which reads the cache and adds an entry`,
+		total: t0,
+		work: { name: "copy", values: normalized(t0) },
+		step: "attention",
+	},
+	{
+		label: `attention's normalized result is mixed in: old total × ${worked(KEEP)} + result × ${worked(MIX)}`,
+		total: t1,
+		totalName: "new total",
+		totalLit: true,
+		work: { name: "attention's result", values: ATTENTION_RESULT },
+	},
+	{
+		label: `a copy, ÷ ${worked(size(t1))}, goes to the router; only the chosen experts' weights are read`,
+		total: t1,
+		work: { name: "copy", values: normalized(t1) },
+		step: "experts",
+	},
+	{
+		label: "the experts' normalized result is mixed in the same way",
+		total: t2,
+		totalName: "new total",
+		totalLit: true,
+		work: { name: "experts' result", values: EXPERTS_RESULT },
+	},
+	{ label: "the total goes on to the next layer", total: t2, totalLit: true },
+];
+---
+
+<ol class="strip">
+	{
+		FRAMES.map((f, i) => (
+			<li class="frame">
+				<p class="head">
+					<span class="n">{i + 1}</span> {f.label}
+				</p>
+				<div class:list={["row", { dim: !f.totalLit }]}>
+					<span class="name">{f.totalName ?? "total"}</span>
+					<span class="cells">
+						{f.total.map((x) => (
+							<span class:list={["obj-work", { changed: Boolean(f.totalName) }]}>{worked(x)}</span>
+						))}
+					</span>
+				</div>
+				{f.work && (
+					<div class="row">
+						<span class="name">{f.work.name}</span>
+						<span class="cells">
+							{f.work.values.map((x) => (
+								<span class="obj-work">{worked(x)}</span>
+							))}
+						</span>
+					</div>
+				)}
+				{f.step === "attention" && (
+					<div class="row">
+						<span class="name">attention and the cache</span>
+						<span class="cells small">
+							<span class="obj-op" />
+							{Array.from({ length: CACHED + 1 }, (_, k) => (
+								<span class:list={["obj-cache", { new: k === CACHED }]} />
+							))}
+						</span>
+					</div>
+				)}
+				{f.step === "experts" && (
+					<div class="row">
+						<span class="name">experts, two of eight read</span>
+						<span class="cells small">
+							<span class="obj-op" />
+							{Array.from({ length: EXPERTS }, (_, k) => (
+								<span class:list={["obj-weight", { unread: !CHOSEN.has(k) }]} />
+							))}
+						</span>
+					</div>
+				)}
+			</li>
+		))
+	}
+</ol>
+
+<style>
+	.strip {
+		list-style: none;
+		margin: 0 auto;
+		padding: 0;
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 13.5rem), 1fr));
+		gap: 2rem 2.5rem;
+		max-width: 46rem;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	.frame {
+		display: grid;
+		gap: 0.625rem;
+		align-content: start;
+	}
+	.head {
+		margin: 0;
+		color: var(--ink);
+	}
+	@media (min-width: 40rem) {
+		.head {
+			min-height: 5.6em;
+		}
+	}
+	.n {
+		color: var(--ink-2);
+		margin-right: 0.25rem;
+	}
+	.row {
+		display: grid;
+		gap: 0.25rem;
+	}
+	.name {
+		font-size: 0.75rem;
+		line-height: 1.2;
+	}
+	.cells {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.obj-work {
+		--obj: 2.25rem;
+		min-width: 3rem;
+	}
+	.small {
+		min-height: 2.25rem;
+	}
+	.small > :is(.obj-cache, .obj-weight) {
+		--obj: 1.25rem;
+		min-width: 0;
+		width: var(--obj);
+	}
+	.obj-op {
+		margin-right: 0.375rem;
+	}
+	.changed {
+		border-width: 2px;
+	}
+	.obj-cache.new {
+		border: 1.5px solid var(--ink);
+	}
+	.unread {
+		opacity: 0.2;
+	}
+</style>

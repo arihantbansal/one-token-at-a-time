@@ -1,0 +1,84 @@
+---
+import { href, neighbors, PARTS, STOPS, type Stop } from "../data/stops";
+import Base from "./Base.astro";
+
+type Props = { frontmatter: { slug: string; description: string } };
+const { slug, description } = Astro.props.frontmatter;
+const stop = STOPS.find((s) => s.slug === slug);
+if (!stop) throw new Error(`no stop with slug "${slug}"`);
+const { next } = neighbors(slug);
+
+const name = (s: Stop) =>
+	s.part === "opening" ? "the opening" : s.part === "appendix" ? `appendix ${s.label}` : `chapter ${s.label}`;
+const meta =
+	stop.part === "opening"
+		? "an illustrated guide"
+		: stop.part === "appendix"
+			? name(stop)
+			: `${PARTS[stop.part]} · ${name(stop)}`;
+const first = STOPS[0];
+---
+
+<Base title={stop.title} description={description} slug={slug}>
+	<article class="article chapter" style={`--chapter: "${stop.label}"`}>
+		<header class="page-head">
+			<p class="meta">{meta}</p>
+			<h1 transition:name={`title-${slug}`}>{stop.title}</h1>
+			<p class="lede">{stop.question}</p>
+		</header>
+		<slot />
+		<footer class="chapter-end">
+			<nav aria-label="Next chapter">
+				{
+					next ? (
+						<a class="next" href={href(next)} rel="next">
+							<span class="meta">next · {name(next)}</span>
+							<span class="next-title">{next.title}</span>
+							<span class="next-q">{next.question}</span>
+						</a>
+					) : (
+						<a class="next" href={href(first)}>
+							<span class="meta">back to the start</span>
+							<span class="next-title">{first.title}</span>
+							<span class="next-q">{first.question}</span>
+						</a>
+					)
+				}
+			</nav>
+		</footer>
+	</article>
+</Base>
+
+<style>
+	.chapter-end {
+		margin-top: 5rem;
+	}
+	.chapter-end a {
+		display: flex;
+		flex-direction: column;
+		text-decoration: none;
+	}
+	.next {
+		gap: 0.4rem;
+		padding: 1.5rem 0 1.625rem;
+		border-block: 1px solid var(--ink);
+	}
+	.next-title {
+		font-size: clamp(1.75rem, 1.3rem + 1.8vw, 2.375rem);
+		font-weight: 560;
+		line-height: 1.1;
+		letter-spacing: -0.02em;
+		text-wrap: balance;
+	}
+	.next-q {
+		max-width: 40ch;
+		font-size: 1.125rem;
+		line-height: 1.45;
+		color: var(--ink-2);
+	}
+	.next:hover .next-title {
+		text-decoration: underline;
+		text-decoration-thickness: 1px;
+		text-underline-offset: 0.12em;
+	}
+</style>

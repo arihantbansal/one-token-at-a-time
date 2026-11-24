@@ -1,0 +1,116 @@
+---
+// The CPU queues kernels and the GPU runs them in order, each lane on one time axis. Big kernels:
+// the CPU stays ahead. Small kernels: queuing one takes longer than running it, so the GPU waits.
+// A CUDA graph: the whole chain is submitted once. Times are illustrative units, not measurements.
+type Case = { title: string; n: number; queue: number; run: number; graph?: boolean };
+const CASES: Case[] = [
+	{ title: "big kernels: the CPU stays ahead", n: 4, queue: 1, run: 4 },
+	{ title: "small kernels: queuing takes longer than running", n: 6, queue: 3, run: 1 },
+	{ title: "a CUDA graph: the chain is queued once", n: 6, queue: 3, run: 1, graph: true },
+];
+
+function lay(c: Case) {
+	const cpu = c.graph
+		? [{ start: 0, end: c.queue }]
+		: Array.from({ length: c.n }, (_, i) => ({ start: i * c.queue, end: (i + 1) * c.queue }));
+	const gpu: { start: number; end: number }[] = [];
+	for (let i = 0; i < c.n; i++) {
+		const ready = c.graph ? c.queue : cpu[i].end;
+		const start = Math.max(ready, gpu[i - 1]?.end ?? 0);
+		gpu.push({ start, end: start + c.run });
+	}
+	const end = gpu[gpu.length - 1].end;
+	const busy = c.n * c.run;
+	return { ...c, cpu, gpu, end, idle: end - busy };
+}
+const rows = CASES.map(lay);
+const scale = Math.max(...rows.map((r) => r.end));
+const pct = (x: number) => `${(x / scale) * 100}%`;
+---
+
+<div class="queue">
+	{
+		rows.map((r) => (
+			<section>
+				<h3>{r.title}</h3>
+				<div
+					class="lanes"
+					role="img"
+					aria-label={`${r.n} kernels finish at ${r.end} units; the GPU waits ${r.idle} of them`}
+				>
+					<span class="lane-name">CPU queues</span>
+					<span class="lane">
+						{r.cpu.map((s) => (
+							<i class="cpu" style={`left: ${pct(s.start)}; width: ${pct(s.end - s.start)}`} />
+						))}
+					</span>
+					<span class="lane-name">GPU runs</span>
+					<span class="lane gpu-lane">
+						{r.gpu.map((s) => (
+							<i class="gpu" style={`left: ${pct(s.start)}; width: ${pct(s.end - s.start)}`} />
+						))}
+					</span>
+				</div>
+				<p class="said">
+					done at {r.end}; the GPU waited {r.idle}
+				</p>
+			</section>
+		))
+	}
+	<p class="note">time in made-up units, the same scale for all three</p>
+</div>
+
+<style>
+	.queue {
+		display: grid;
+		gap: 1.5rem;
+		max-width: 36rem;
+		margin: 0 auto;
+		font: 0.8125rem/1.4 var(--mono);
+		color: var(--ink-2);
+	}
+	p {
+		margin: 0;
+	}
+	h3 {
+		margin: 0 0 0.5rem;
+		font: inherit;
+		color: var(--ink);
+	}
+	.lanes {
+		display: grid;
+		grid-template-columns: 6.5rem minmax(0, 1fr);
+		align-items: center;
+		gap: 0.375rem 0.75rem;
+	}
+	.lane {
+		position: relative;
+		height: 1.125rem;
+		border-left: 1px solid var(--ink-2);
+	}
+	.gpu-lane {
+		background: repeating-linear-gradient(90deg, var(--rule) 0 1px, transparent 1px 6px);
+		background-size: 100% 1px;
+		background-repeat: no-repeat;
+		background-position: 0 50%;
+	}
+	.lane i {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		box-shadow: inset -2px 0 0 var(--paper-2);
+	}
+	.cpu {
+		background: var(--ink-2);
+	}
+	.gpu {
+		background: var(--ink);
+	}
+	.said {
+		margin-top: 0.375rem;
+		text-align: right;
+	}
+	.note {
+		font-size: 0.75rem;
+	}
+</style>
